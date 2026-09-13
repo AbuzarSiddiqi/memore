@@ -1,6 +1,7 @@
 "use client";
 // Neo-brutalist UI primitives used across every screen.
 import React, { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import type { MemeLabel } from "@/lib/types";
 import { Icon, IconSticker, type IconName } from "./icons";
@@ -104,39 +105,86 @@ export function EmptyState({ icon = "eye", emoji, title, message, action }: { ic
   );
 }
 
+let scrollLockCount = 0;
+function lockBodyScroll() {
+  if (typeof document === "undefined") return;
+  scrollLockCount++;
+  if (scrollLockCount === 1) {
+    document.body.style.overflow = "hidden";
+  }
+}
+function unlockBodyScroll() {
+  if (typeof document === "undefined") return;
+  scrollLockCount = Math.max(0, scrollLockCount - 1);
+  if (scrollLockCount === 0) {
+    document.body.style.overflow = "";
+  }
+}
+
 export function Sheet({ open, onClose, children, label }: { open: boolean; onClose: () => void; children: React.ReactNode; label: string }) {
   const ref = useRef<HTMLDivElement>(null);
   // Stay mounted through the exit animation instead of vanishing (flicker).
   const [mounted, setMounted] = useState(open);
   const [closing, setClosing] = useState(false);
+  const isLocked = useRef(false);
 
   useEffect(() => {
     if (open) {
       setMounted(true);
       setClosing(false);
+      if (!isLocked.current) {
+        lockBodyScroll();
+        isLocked.current = true;
+      }
       const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
       document.addEventListener("keydown", onKey);
-      document.body.style.overflow = "hidden";
       ref.current?.focus();
       return () => {
         document.removeEventListener("keydown", onKey);
-        document.body.style.overflow = "";
+        if (isLocked.current) {
+          unlockBodyScroll();
+          isLocked.current = false;
+        }
       };
     }
     if (!mounted) return;
+    if (isLocked.current) {
+      unlockBodyScroll();
+      isLocked.current = false;
+    }
     setClosing(true);
     const t = setTimeout(() => { setMounted(false); setClosing(false); }, 240);
     return () => clearTimeout(t);
   }, [open, onClose, mounted]);
 
-  if (!mounted) return null;
-  return (
+  // Always ensure cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (isLocked.current) {
+        unlockBodyScroll();
+        isLocked.current = false;
+      }
+    };
+  }, []);
+
+  if (!mounted || typeof document === "undefined") return null;
+
+  return createPortal(
     <div className={`sheet-backdrop ${closing ? "closing" : ""}`} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={`sheet ${closing ? "sheet-closing" : ""}`} role="dialog" aria-modal="true" aria-label={label} tabIndex={-1} ref={ref}>
+      <div
+        className={`sheet ${closing ? "sheet-closing" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        tabIndex={-1}
+        ref={ref}
+        style={{ overscrollBehavior: "contain", WebkitOverflowScrolling: "touch", touchAction: "pan-y" }}
+      >
         <div className="sheet-grab" />
         {children}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

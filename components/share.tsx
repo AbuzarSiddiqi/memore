@@ -16,6 +16,9 @@ interface Person {
   recent: boolean; // came from an active/recent chat
 }
 
+let cachedChatPeople: Person[] = [];
+let cachedContacts: Person[] = [];
+
 /** Send the meme to every selected conversation (creates chats on the fly). */
 export function ShareSheet({ meme, open, onClose, onSent }: { meme: MemeView; open: boolean; onClose: () => void; onSent?: () => void }) {
   const toast = useToast();
@@ -35,16 +38,28 @@ export function ShareSheet({ meme, open, onClose, onSent }: { meme: MemeView; op
     }
   }, [open]);
 
-  const chatPeople: Person[] = (chats.data?.chats ?? []).map((c) => ({ ...c.other, recent: true }));
-  const extraPeople: Person[] = (contacts.data?.contacts ?? [])
+  if (chats.data?.chats && chats.data.chats.length > 0) {
+    cachedChatPeople = chats.data.chats.map((c) => ({ ...c.other, recent: true }));
+  }
+  if (contacts.data?.contacts && contacts.data.contacts.length > 0) {
+    cachedContacts = contacts.data.contacts.map((c) => ({ ...c, recent: false }));
+  }
+
+  const chatPeople: Person[] = chats.data?.chats
+    ? chats.data.chats.map((c) => ({ ...c.other, recent: true }))
+    : cachedChatPeople;
+  const rawContacts: Person[] = contacts.data?.contacts
+    ? contacts.data.contacts.map((c) => ({ ...c, recent: false }))
+    : cachedContacts;
+  const extraPeople: Person[] = rawContacts
     .filter((c) => !chatPeople.some((p) => p.username === c.username))
-    .slice(0, 12)
-    .map((c) => ({ ...c, recent: false }));
+    .slice(0, 12);
 
   const match = (p: Person) => !q || p.username.includes(q.toLowerCase()) || p.display_name.toLowerCase().includes(q.toLowerCase());
   const recentList = chatPeople.filter(match);
   const extraList = extraPeople.filter(match);
   const searching = q.trim().length > 0;
+  const isLoading = (chats.loading || contacts.loading) && recentList.length === 0 && extraList.length === 0;
 
   const toggle = (username: string) =>
     setSelected((sel) => (sel.includes(username) ? sel.filter((x) => x !== username) : [...sel, username]));
@@ -118,9 +133,21 @@ export function ShareSheet({ meme, open, onClose, onSent }: { meme: MemeView; op
         </div>
 
         <div className="max-h-[38vh] min-h-[140px] overflow-y-auto no-scrollbar">
-          {recentList.length === 0 && extraList.length === 0 && (
+          {isLoading ? (
+            <div className="py-6 text-center">
+              <div className="flex justify-center gap-4 mb-3">
+                {[...Array(4)].map((_, i) => (
+                  <div key={i} className="flex flex-col items-center gap-1.5 animate-pulse">
+                    <div className="w-[50px] h-[50px] rounded-full bg-white/10" />
+                    <div className="w-10 h-2 rounded bg-white/10" />
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11.5px] text-white/40">Loading people…</p>
+            </div>
+          ) : recentList.length === 0 && extraList.length === 0 ? (
             <p className="py-8 text-center text-[12.5px] text-white/45">{searching ? `No people for "${q}".` : "No one to send this to yet."}</p>
-          )}
+          ) : null}
           {recentList.length > 0 && (
             <>
               <div className="mb-1.5 px-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-white/45">{searching ? "PEOPLE" : "RECENT"}</div>

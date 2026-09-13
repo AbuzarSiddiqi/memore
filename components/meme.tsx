@@ -825,15 +825,18 @@ export function CommentsSheet({ meme, onClose, variant = "feed" }: { meme: MemeV
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = ""; };
   }, []);
-  return (
-    <div className="fixed inset-0 z-[70]" onClick={(e) => { if (e.target === e.currentTarget) close(); }}>
+
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[70]" onClick={(e) => { if (e.target === e.currentTarget) close(); }} style={{ touchAction: "none" }}>
       <div className={`absolute inset-0 bg-black/55 ${closing ? "c-fade-out" : "c-fade-in"}`} onClick={close} />
       <div
         role="dialog"
         aria-modal="true"
         aria-label={`Comments · ${meme.caption}`}
         className={`absolute bottom-0 left-0 right-0 mx-auto max-w-[460px] flex flex-col bg-[#131313] border-t border-x border-[#232323] rounded-t-[26px] text-white shadow-[0_-12px_44px_rgba(0,0,0,0.7)] ${closing ? "c-slide-down" : "c-slide-up"}`}
-        style={variant === "reels" ? { top: "calc(64px + 34vh + 12px)", paddingBottom: "max(14px, env(safe-area-inset-bottom, 0px))" } : { maxHeight: "72vh", paddingBottom: "max(14px, env(safe-area-inset-bottom, 0px))" }}
+        style={variant === "reels" ? { top: "calc(64px + 34vh + 12px)", paddingBottom: "max(14px, env(safe-area-inset-bottom, 0px))", overscrollBehavior: "contain", WebkitOverflowScrolling: "touch", touchAction: "pan-y" } : { maxHeight: "72vh", paddingBottom: "max(14px, env(safe-area-inset-bottom, 0px))", overscrollBehavior: "contain", WebkitOverflowScrolling: "touch", touchAction: "pan-y" }}
       >
         <div className="pt-2.5 pb-1 flex justify-center shrink-0 cursor-pointer" onClick={close} aria-label="Close comments">
           <span className="w-10 h-1 rounded-full bg-white/25" />
@@ -850,7 +853,8 @@ export function CommentsSheet({ meme, onClose, variant = "feed" }: { meme: MemeV
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

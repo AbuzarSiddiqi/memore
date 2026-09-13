@@ -19,8 +19,14 @@ import path from "path";
 export const CHAT_TTL_MS = 24 * 60 * 60 * 1000;
 const CHATS_FILE = "chats_v2.json";
 let chatHydrationPromise: Promise<void> | null = null;
+let lastChatHydrate = 0;
+const CHAT_HYDRATE_TTL_MS = 3000;
 
-export async function hydrateChats(): Promise<void> {
+export async function hydrateChats(force = false): Promise<void> {
+  const now = Date.now();
+  if (!force && now - lastChatHydrate < CHAT_HYDRATE_TTL_MS) {
+    return;
+  }
   if (chatHydrationPromise) return chatHydrationPromise;
   chatHydrationPromise = (async () => {
     try {
@@ -80,6 +86,7 @@ export async function hydrateChats(): Promise<void> {
         }
         normalizeDbUuids(d);
       }
+      lastChatHydrate = Date.now();
     } catch (err) {
       console.warn("hydrateChats warning:", err);
     } finally {
@@ -91,6 +98,7 @@ export async function hydrateChats(): Promise<void> {
 
 let persistChatTimer: ReturnType<typeof setTimeout> | null = null;
 export async function persistChats(immediate = false): Promise<void> {
+  lastChatHydrate = Date.now();
   const doUpload = async () => {
     try {
       const { createAdminClient } = await import("@/lib/supabase/admin");
@@ -498,6 +506,14 @@ export async function markRead(user: Profile, conversationId: string): Promise<b
   const p0 = toCanonicalUuid(c.participants[0]);
   const p1 = toCanonicalUuid(c.participants[1]);
   if (p0 !== canonUserId && p1 !== canonUserId) return false;
+
+  const oid = p0 === canonUserId ? p1 : p0;
+  const lastRead = c.reads?.[user.id] ?? c.reads?.[canonUserId] ?? "";
+  const hasUnread = d.chat_messages.some(
+    (m) => m.conversation_id === c.id && toCanonicalUuid(m.sender_id) === oid && m.created_at > lastRead
+  );
+  if (!hasUnread) return false;
+
   const nowStr = new Date().toISOString();
   c.reads = { ...c.reads, [user.id]: nowStr, [canonUserId]: nowStr };
   save();

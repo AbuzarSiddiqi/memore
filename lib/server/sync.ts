@@ -230,13 +230,21 @@ export async function hydrateFromSupabase(): Promise<DB | null> {
   if (!admin) return null;
 
   try {
-    // Query authoritative PostgreSQL tables directly — real Supabase data ONLY
-    const { data: dbMemes, error: memeErr } = await admin.from("memes").select("*").order("created_at", { ascending: false });
+    // Query authoritative PostgreSQL tables directly in parallel — real Supabase data ONLY
+    const [
+      { data: dbMemes, error: memeErr },
+      { data: dbProfiles },
+      { data: dbHoldings },
+      { data: dbTransactions },
+      { data: dbComments },
+    ] = await Promise.all([
+      admin.from("memes").select("*").order("created_at", { ascending: false }),
+      admin.from("profiles").select("*"),
+      admin.from("holdings").select("*"),
+      admin.from("transactions").select("*"),
+      admin.from("comments").select("*"),
+    ]);
     if (memeErr) console.error("[Supabase Sync] Error fetching memes:", memeErr);
-    const { data: dbProfiles } = await admin.from("profiles").select("*");
-    const { data: dbHoldings } = await admin.from("holdings").select("*");
-    const { data: dbTransactions } = await admin.from("transactions").select("*");
-    const { data: dbComments } = await admin.from("comments").select("*");
 
     console.log(`[Supabase Sync] Hydrated ${dbMemes?.length || 0} real memes and ${dbProfiles?.length || 0} profiles from PostgreSQL.`);
     // Form structured DB object

@@ -9,7 +9,9 @@ export async function GET() {
   const user = await requireUser();
   if (!user) return fail("Log in first.", 401);
   expireChats(); // server-authoritative cleanup, idempotent
-  return ok({ chats: listChats(user), unread: chatUnreadSafe(user) });
+  const chats = listChats(user);
+  const unread = chats.reduce((s, c) => s + (c.muted ? 0 : c.unread), 0);
+  return ok({ chats, unread });
 }
 
 export async function POST(req: NextRequest) {
@@ -25,8 +27,4 @@ export async function POST(req: NextRequest) {
   const result = await getOrCreateConversation(user, username);
   if ("error" in result) return fail(result.error);
   return ok({ id: result.conversation.id, expires_at: result.conversation.expires_at, other: result.other.username });
-}
-
-function chatUnreadSafe(user: Parameters<typeof listChats>[0]): number {
-  return listChats(user).reduce((s, c) => s + (c.muted ? 0 : c.unread), 0);
 }

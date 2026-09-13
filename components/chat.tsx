@@ -31,11 +31,17 @@ export function ChatClock({ expiresAt, remainingMs, subtle = false }: { expiresA
   );
 }
 
+let cachedContactsList: ChatOtherUser[] = [];
+
 /** Contacts sheet: pick a person to start a chat (or to send something to). */
 export function ContactsSheet({ open, onClose, title = "START SOMETHING", onPicked }: { open: boolean; onClose: () => void; title?: string; onPicked: (username: string) => void }) {
   const { data, loading } = useApi<{ contacts: ChatOtherUser[] }>(open ? "/api/chats/contacts" : null);
+  if (data?.contacts && data.contacts.length > 0) {
+    cachedContactsList = data.contacts;
+  }
   const [q, setQ] = useState("");
-  const list = (data?.contacts ?? []).filter(
+  const contacts = data?.contacts ?? cachedContactsList;
+  const list = contacts.filter(
     (c) => !q || c.username.includes(q.toLowerCase()) || c.display_name.toLowerCase().includes(q.toLowerCase())
   );
   return (
@@ -44,7 +50,7 @@ export function ContactsSheet({ open, onClose, title = "START SOMETHING", onPick
       <p className="text-[11.5px] muted mb-3">Pick a person. The chat self-destructs in 24h.</p>
       <input className="neo-input mb-3" placeholder="Search people…" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="max-h-[46vh] overflow-y-auto no-scrollbar space-y-2">
-        {loading && <div className="text-[12px] muted text-center py-4">Loading people…</div>}
+        {loading && list.length === 0 && <div className="text-[12px] muted text-center py-4">Loading people…</div>}
         {list.map((c) => (
           <button key={c.id} className="w-full flex items-center gap-3 p-2 rounded-2xl hover:bg-black/5 text-left" onClick={() => onPicked(c.username)}>
             <Avatar name={c.display_name} bg={c.avatar_bg} size={36} />

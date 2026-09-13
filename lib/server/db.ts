@@ -107,7 +107,7 @@ export function triggerBackgroundCloudSync(): Promise<void> {
 export async function ensureHydrated(force = false): Promise<DB> {
   const current = db();
   const now = Date.now();
-  if (!force && lastCloudSyncAt > 0 && now - lastCloudSyncAt < 3000) {
+  if (!force && lastCloudSyncAt > 0 && now - lastCloudSyncAt < 8000) {
     return current;
   }
   if (inFlightSync) {
