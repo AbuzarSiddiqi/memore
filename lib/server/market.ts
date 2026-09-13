@@ -403,7 +403,7 @@ export function ensureMarketFresh() {
     ticks++;
   }
   d.meta.last_tick = last;
-  persistNow();
+  save();
 }
 
 function runTick(at: Date) {

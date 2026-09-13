@@ -110,6 +110,41 @@ export async function ensureHydrated(force = false): Promise<DB> {
   if (!force && lastCloudSyncAt > 0 && now - lastCloudSyncAt < 8000) {
     return current;
   }
+
+  // If memory already has live memes and this is not a forced sync, run sync in background without stalling HTTP requests!
+  if (!force && current.memes.length > 0 && lastCloudSyncAt > 0) {
+    if (!inFlightSync) {
+      inFlightSync = (async () => {
+        try {
+          const cloudDb = await hydrateFromSupabase();
+          if (cloudDb && state) {
+            state.memes = cloudDb.memes;
+            for (const cu of cloudDb.users) {
+              const idx = state.users.findIndex((u) => u.id === cu.id);
+              if (idx >= 0) {
+                state.users[idx] = { ...state.users[idx], ...cu };
+              } else {
+                state.users.push(cu);
+              }
+            }
+            if (cloudDb.holdings?.length) state.holdings = cloudDb.holdings;
+            if (cloudDb.transactions?.length) state.transactions = cloudDb.transactions;
+            if (cloudDb.comments?.length) state.comments = cloudDb.comments;
+            normalizeDbUuids(state);
+            lastCloudSyncAt = Date.now();
+            save();
+          }
+        } catch (err) {
+          console.warn("Background cloud sync warning:", err);
+        } finally {
+          inFlightSync = null;
+        }
+        return current;
+      })();
+    }
+    return current;
+  }
+
   if (inFlightSync) {
     try { await inFlightSync; } catch {}
     return current;
@@ -137,7 +172,7 @@ export async function ensureHydrated(force = false): Promise<DB> {
 
         normalizeDbUuids(state);
         lastCloudSyncAt = Date.now();
-        persistNow();
+        save();
       }
     } catch (err) {
       console.warn("ensureHydrated cloud sync warning:", err);

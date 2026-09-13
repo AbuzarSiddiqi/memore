@@ -106,7 +106,12 @@ export async function currentUser(): Promise<Profile | null> {
     }
   }
 
-  // Check Supabase Auth session (handles Google OAuth & Supabase Auth users)
+  // Check Supabase Auth session only if Supabase cookies exist (avoids expensive network call when not logged into Supabase)
+  const hasSbCookies = store.getAll().some((c) => c.name.startsWith("sb-"));
+  if (!hasSbCookies) {
+    return null;
+  }
+
   try {
     const { createServerSupabaseClient } = await import("@/lib/supabase/server");
     const supabase = await createServerSupabaseClient();

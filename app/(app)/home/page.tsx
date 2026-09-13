@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { api, useOfflineStatus, useSession } from "@/lib/client";
-import { getCachedFeed, setCachedFeed } from "@/lib/client-cache";
+import { getCachedFeed, setCachedFeed, getMemoryCache } from "@/lib/client-cache";
 import type { EventView, FeedResponse, MissionView, SeasonView } from "@/lib/types";
 import { MemeCard, VideoMemeCard } from "@/components/meme";
 import { EmptyState, FeedSkeleton } from "@/components/ui";
@@ -23,10 +23,22 @@ export default function HomePage() {
   const { user } = useSession();
   const isOffline = useOfflineStatus();
   const [tab, setTab] = useState<string>("foryou");
-  const [pages, setPages] = useState<FeedResponse["memes"][]>([]);
+  const [pages, setPages] = useState<FeedResponse["memes"][]>(() => {
+    if (typeof window !== "undefined") {
+      const mem = getMemoryCache<any[]>("feed:foryou");
+      if (mem && mem.length > 0) return [mem];
+    }
+    return [];
+  });
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      const mem = getMemoryCache<any[]>("feed:foryou");
+      if (mem && mem.length > 0) return false;
+    }
+    return true;
+  });
   const [missions, setMissions] = useState<MissionView[]>([]);
   const sentinel = useRef<HTMLDivElement>(null);
 
@@ -34,6 +46,14 @@ export default function HomePage() {
   useEffect(() => {
     let active = true;
     (async () => {
+      const mem = getMemoryCache<any[]>(`feed:${tab}`);
+      if (mem && mem.length > 0) {
+        if (active) {
+          setPages([mem]);
+          setLoading(false);
+        }
+        return;
+      }
       const cached = await getCachedFeed(tab);
       if (active && cached && cached.length > 0) {
         setPages([cached]);
@@ -44,10 +64,21 @@ export default function HomePage() {
   }, [tab]);
 
   const loadPage = useCallback(async (p: number, t: string, replace: boolean) => {
-    // Only show full loading if we have no memes for this tab yet
+    // Only show skeleton if neither memory nor IndexedDB has cached posts for this tab
     if (replace) {
-      const mem = await getCachedFeed(t);
-      if (!mem || mem.length === 0) setLoading(true);
+      const mem = getMemoryCache<any[]>(`feed:${t}`);
+      if (mem && mem.length > 0) {
+        setPages([mem]);
+        setLoading(false);
+      } else {
+        const idb = await getCachedFeed(t);
+        if (idb && idb.length > 0) {
+          setPages([idb]);
+          setLoading(false);
+        } else {
+          setLoading(true);
+        }
+      }
     }
     try {
       const r = await api<FeedResponse>(`/api/memes?tab=${t}&page=${p}&limit=6`);
@@ -57,6 +88,13 @@ export default function HomePage() {
           const all = Array.from(new Map(next.flat().map((m) => [m.id, m])).values());
           // Update persistent cache for this tab
           void setCachedFeed(t, all);
+          // Seed Reels mix cache with video memes
+          const vids = all.filter((m) => m.media_type === "video");
+          if (vids.length > 0) {
+            const existingMix = getMemoryCache<any[]>("feed:mix") ?? [];
+            const mergedMix = Array.from(new Map([...vids, ...existingMix].map((m) => [m.id, m])).values());
+            void setCachedFeed("mix", mergedMix);
+          }
           return next;
         });
         setHasMore(r.has_more);

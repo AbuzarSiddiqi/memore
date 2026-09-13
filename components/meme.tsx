@@ -117,6 +117,11 @@ export function VideoMedia({ meme, className = "" }: { meme: MemeView; className
   const [paused, setPaused] = useState(false);
   const [error, setError] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [ready, setReady] = useState(false);
+
+  const isVideoThumb = meme.thumbnail_url?.match(/\.(mp4|webm|mov|m4v)(\?.*)?$/i);
+  const posterUrl = !isVideoThumb && meme.thumbnail_url ? meme.thumbnail_url : undefined;
+  const videoSrc = meme.media_url?.includes("#") ? meme.media_url : `${meme.media_url}#t=0.001`;
 
   useEffect(() => {
     const video = ref.current;
@@ -154,13 +159,15 @@ export function VideoMedia({ meme, className = "" }: { meme: MemeView; className
     <div ref={wrapRef} className={`relative bg-black ${className}`} style={{ aspectRatio: `${meme.width}/${meme.height}` }}>
       <video
         ref={ref}
-        src={meme.media_url}
-        poster={meme.thumbnail_url}
+        src={videoSrc}
+        poster={posterUrl}
         muted={muted}
         loop
         playsInline
         preload="metadata"
         className="meme-media absolute inset-0 w-full h-full object-cover"
+        onLoadedData={() => setReady(true)}
+        onPlaying={() => setReady(true)}
         onError={() => setError(true)}
         onTimeUpdate={(e) => {
           const v = e.currentTarget;
@@ -168,6 +175,11 @@ export function VideoMedia({ meme, className = "" }: { meme: MemeView; className
         }}
         aria-label={meme.caption}
       />
+      {!ready && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/30 pointer-events-none">
+          <div className="w-8 h-8 rounded-full border-2 border-white/20 border-t-[#C8FF3D] animate-spin" />
+        </div>
+      )}
       {paused && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <span className="w-14 h-14 rounded-full bg-black/50 flex items-center justify-center text-white"><Icon name="play" size={26} filled /></span>

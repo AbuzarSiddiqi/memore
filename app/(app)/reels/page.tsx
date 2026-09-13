@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { api, fmtNum, useApi, useSession } from "@/lib/client";
+import { getCachedFeed, setCachedFeed, getMemoryCache } from "@/lib/client-cache";
 import type { FeedResponse, MemeView } from "@/lib/types";
 import { Avatar, ChangePct, NeoButton } from "@/components/ui";
 import { CommentsSheet, type CommentRow, InvestSheet } from "@/components/meme";
@@ -130,28 +131,60 @@ function InfoOverlay({ meme, liveInvested, dimmed, onInvest, children }: { meme:
   );
 }
 
-function VideoSlide({ meme, active, commentsOpen, onComments, onInvest, dim, dataTick }: { meme: MemeView; active: boolean; commentsOpen: boolean; onComments: () => void; onInvest: () => void; dim: boolean; dataTick: number }) {
+function VideoSlide({
+  meme,
+  idx,
+  activeIndex,
+  active,
+  commentsOpen,
+  onComments,
+  onInvest,
+  dim,
+  dataTick,
+}: {
+  meme: MemeView;
+  idx: number;
+  activeIndex: number;
+  active: boolean;
+  commentsOpen: boolean;
+  onComments: () => void;
+  onInvest: () => void;
+  dim: boolean;
+  dataTick: number;
+}) {
   const ref = useRef<HTMLVideoElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const [muted, setMuted] = useState(false); // reels start unmuted
+  const [muted, setMuted] = useState(true); // Start muted so all modern mobile browsers guarantee instant autoplay
   const [paused, setPaused] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [videoReady, setVideoReady] = useState(false);
   const { events, tap, myInvested } = useTapInvest(meme, { prefix: "reel" });
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const overlayDim = commentsOpen || dim;
+
+  // Preload adjacent slides: active is auto, adjacent (next/prev) is auto, distant is none
+  const isAdjacent = Math.abs(idx - activeIndex) <= 1;
+  const preloadMode = active ? "auto" : isAdjacent ? "auto" : "none";
+
+  // Prevent passing video files (.mp4/.webm) as poster images
+  const isVideoThumb = meme.thumbnail_url?.match(/\.(mp4|webm|mov|m4v)(\?.*)?$/i);
+  const posterUrl = !isVideoThumb && meme.thumbnail_url ? meme.thumbnail_url : undefined;
+  const videoSrc = meme.media_url?.includes("#") ? meme.media_url : `${meme.media_url}#t=0.001`;
 
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
     if (active && !paused) {
+      v.muted = muted;
       v.play().catch(() => {
-        // browser blocked unmuted autoplay — fall back to muted playback
         setMuted(true);
         v.muted = true;
         v.play().catch(() => {});
       });
-    } else v.pause();
-  }, [active, paused]);
+    } else {
+      v.pause();
+    }
+  }, [active, paused, muted]);
 
   useEffect(() => {
     if (ref.current) ref.current.muted = muted;
@@ -187,12 +220,15 @@ function VideoSlide({ meme, active, commentsOpen, onComments, onInvest, dim, dat
       <div className={`reel-media absolute overflow-hidden bg-black ${commentsOpen ? "top-[64px] left-1/2 -translate-x-1/2 w-[64%] h-[34%] rounded-[22px] shadow-[0_12px_44px_rgba(0,0,0,0.65)]" : "inset-0"}`}>
         <video
           ref={ref}
-          src={meme.media_url}
-          poster={meme.thumbnail_url}
+          src={videoSrc}
+          poster={posterUrl}
           muted={muted}
           loop
           playsInline
-          preload={active ? "auto" : "none"}
+          preload={preloadMode}
+          onLoadedData={() => setVideoReady(true)}
+          onPlaying={() => setVideoReady(true)}
+          onWaiting={() => setVideoReady(false)}
           onTimeUpdate={(e) => {
             const v = e.currentTarget;
             if (v.duration) setProgress(v.currentTime / v.duration);
@@ -200,11 +236,31 @@ function VideoSlide({ meme, active, commentsOpen, onComments, onInvest, dim, dat
           className="absolute inset-0 w-full h-full object-contain cursor-pointer"
           aria-label={meme.caption}
         />
+        {/* subtle loader if waiting for video buffer */}
+        {!videoReady && active && (
+          <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/40 backdrop-blur-sm transition-opacity duration-300">
+            <div className="w-9 h-9 rounded-full border-2 border-white/20 border-t-[#C8FF3D] animate-spin" />
+            <span className="text-[10px] font-bold tracking-wider text-white/70 hd">LOADING REEL…</span>
+          </div>
+        )}
         {/* ambient blur: strongest at the very edges, fading into the reel */}
         <div className="pointer-events-none absolute inset-0 z-[5]" aria-hidden>
           <div className="reel-ambient absolute top-0 inset-x-0 h-[18%]" style={{ maskImage: "linear-gradient(to bottom, black 25%, transparent)", WebkitMaskImage: "linear-gradient(to bottom, black 25%, transparent)" }} />
           <div className="reel-ambient absolute bottom-0 inset-x-0 h-[18%]" style={{ maskImage: "linear-gradient(to top, black 25%, transparent)", WebkitMaskImage: "linear-gradient(to top, black 25%, transparent)" }} />
         </div>
+        {/* sound toggle pill */}
+        {active && !commentsOpen && (
+          <div className={`absolute top-16 right-3.5 z-20 reel-fade ${overlayDim ? "reel-hidden" : "reel-shown"}`}>
+            <button
+              className="neo-btn sm !bg-black/55 !border-0 text-white backdrop-blur-sm !rounded-full !px-3 !py-1 text-[11px] gap-1.5 pointer-events-auto"
+              onClick={(e) => { e.stopPropagation(); setMuted((m) => !m); }}
+              aria-label={muted ? "Unmute" : "Mute"}
+            >
+              <Icon name={muted ? "volume-off" : "volume-on"} size={14} />
+              <span>{muted ? "Tap for sound" : "Sound on"}</span>
+            </button>
+          </div>
+        )}
         {/* paused overlay: mute above play — only when the reel is stopped */}
         {paused && !commentsOpen && (
           <div className={`absolute inset-0 flex flex-col items-center justify-center gap-3.5 pointer-events-none z-20 reel-fade ${dim ? "reel-hidden" : "reel-shown"}`}>
@@ -263,7 +319,7 @@ function ImageSlide({ meme, active, commentsOpen, onComments, onInvest, dim, dat
       <div className={`reel-media absolute overflow-hidden bg-black ${commentsOpen ? "top-[64px] left-1/2 -translate-x-1/2 w-[64%] h-[34%] rounded-[22px] shadow-[0_12px_44px_rgba(0,0,0,0.65)]" : "inset-0"}`}>
         <div className="absolute inset-0 blur-2xl opacity-30 scale-110" style={{ backgroundImage: `url(${meme.media_url})`, backgroundSize: "cover", backgroundPosition: "center" }} aria-hidden />
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={meme.media_url} alt={meme.caption} className="absolute inset-0 w-full h-full object-contain" draggable={false} />
+        <img src={meme.media_url} alt={meme.caption} className="absolute inset-0 w-full h-full object-contain" draggable={false} loading={active ? "eager" : "lazy"} />
         {/* ambient blur: strongest at the very edges, fading into the reel */}
         <div className="pointer-events-none absolute inset-0 z-[5]" aria-hidden>
           <div className="reel-ambient absolute top-0 inset-x-0 h-[18%]" style={{ maskImage: "linear-gradient(to bottom, black 25%, transparent)", WebkitMaskImage: "linear-gradient(to bottom, black 25%, transparent)" }} />
@@ -292,18 +348,56 @@ function InstagramSlide({ meme, commentsOpen, onComments, onInvest, dim }: { mem
 
 export default function ReelsPage() {
   const { data, loading, refresh } = useApi<FeedResponse>("/api/memes?tab=mix&limit=24");
+  const [cachedMemes, setCachedMemes] = useState<MemeView[]>(() => {
+    if (typeof window !== "undefined") {
+      const fromApi = getMemoryCache<FeedResponse>("/api/memes?tab=mix&limit=24");
+      if (fromApi?.memes?.length) return fromApi.memes;
+      const memMix = getMemoryCache<MemeView[]>("feed:mix");
+      if (memMix?.length) return memMix;
+      const memForYou = getMemoryCache<MemeView[]>("feed:foryou");
+      if (memForYou?.length) {
+        const vids = memForYou.filter((m) => m.media_type === "video");
+        const others = memForYou.filter((m) => m.media_type !== "video");
+        return [...vids, ...others];
+      }
+    }
+    return [];
+  });
   const [active, setActive] = useState(0);
   const [commentsFor, setCommentsFor] = useState<MemeView | null>(null);
   const [investFor, setInvestFor] = useState<MemeView | null>(null);
-  // realtime-ish counts: bumped by sheet closes and double-tap trades, plus a
-  // slow silent poll so prices/counts from other users drift in.
   const [dataTick, setDataTick] = useState(0);
   const bumpFeed = useCallback(() => { refresh(); setDataTick((t) => t + 1); }, [refresh]);
-  // touch-idle: overlays fade away so the reel gets the screen; any touch
-  // anywhere brings everything back instantly.
   const [uiIdle, setUiIdle] = useState(false);
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Async fallback from IndexedDB if memory cache wasn't populated yet
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (cachedMemes.length > 0) return;
+      const idbMix = await getCachedFeed("mix");
+      if (alive && idbMix && idbMix.length > 0) {
+        setCachedMemes(idbMix);
+        return;
+      }
+      const idbForYou = await getCachedFeed("foryou");
+      if (alive && idbForYou && idbForYou.length > 0) {
+        const vids = idbForYou.filter((m) => m.media_type === "video");
+        const others = idbForYou.filter((m) => m.media_type !== "video");
+        setCachedMemes([...vids, ...others]);
+      }
+    })();
+    return () => { alive = false; };
+  }, [cachedMemes.length]);
+
+  // Persist fresh reels to cache when received
+  useEffect(() => {
+    if (data?.memes && data.memes.length > 0) {
+      void setCachedFeed("mix", data.memes);
+    }
+  }, [data]);
 
   useEffect(() => {
     const t = setInterval(() => refresh(), 12000);
@@ -326,6 +420,8 @@ export default function ReelsPage() {
     return () => { if (idleTimer.current) clearTimeout(idleTimer.current); };
   }, [commentsFor, wake]);
 
+  const memes = (data?.memes && data.memes.length > 0) ? data.memes : cachedMemes;
+
   useEffect(() => {
     const c = containerRef.current;
     if (!c) return;
@@ -335,9 +431,7 @@ export default function ReelsPage() {
     );
     c.querySelectorAll("[data-idx]").forEach((el) => io.observe(el));
     return () => io.disconnect();
-  }, [data]);
-
-  const memes = data?.memes ?? [];
+  }, [memes.length]);
 
   return (
     <div
@@ -377,11 +471,16 @@ export default function ReelsPage() {
         <span className="pill p-black !text-[10px]"><Spark size={11} color="#C8FF3D" /> REELS · swipe up</span>
       </div>
       <div ref={containerRef} className={`h-full w-full snap-y snap-mandatory no-scrollbar ${commentsFor ? "overflow-hidden" : "overflow-y-scroll"}`}>
-        {loading && <div className="h-full flex items-center justify-center text-white hd">LOADING REELS…</div>}
+        {loading && memes.length === 0 && (
+          <div className="h-full flex flex-col items-center justify-center gap-3 text-white">
+            <div className="w-12 h-12 rounded-full border-2 border-white/20 border-t-[#C8FF3D] animate-spin" />
+            <span className="hd font-bold text-sm tracking-wider text-white/80">LOADING REELS…</span>
+          </div>
+        )}
         {memes.map((m, i) => (
           <div key={m.id} data-idx={i} className="h-full w-full snap-start snap-always">
             {m.source === "instagram" ? <InstagramSlide meme={m} commentsOpen={commentsFor?.id === m.id} onComments={() => setCommentsFor(m)} onInvest={() => setInvestFor(m)} dim={uiIdle} />
-              : m.media_type === "video" ? <VideoSlide meme={m} active={i === active} commentsOpen={commentsFor?.id === m.id} onComments={() => setCommentsFor(m)} onInvest={() => setInvestFor(m)} dim={uiIdle} dataTick={dataTick} />
+              : m.media_type === "video" ? <VideoSlide meme={m} idx={i} activeIndex={active} active={i === active} commentsOpen={commentsFor?.id === m.id} onComments={() => setCommentsFor(m)} onInvest={() => setInvestFor(m)} dim={uiIdle} dataTick={dataTick} />
                 : <ImageSlide meme={m} active={i === active} commentsOpen={commentsFor?.id === m.id} onComments={() => setCommentsFor(m)} onInvest={() => setInvestFor(m)} dim={uiIdle} dataTick={dataTick} />}
           </div>
         ))}

@@ -44,7 +44,16 @@ export function useApi<T>(url: string | null, deps: unknown[] = []) {
   // state, not a ref: bumping a ref never re-renders, so refresh() was a no-op
   const [tick, setTick] = useState(0);
   const hasData = useRef(!!initialCache);
+  const prevUrlRef = useRef(url);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
+
+  if (prevUrlRef.current !== url) {
+    prevUrlRef.current = url;
+    const freshCache = url ? getMemoryCache<T>(url) : null;
+    setData(freshCache);
+    setLoading(!freshCache);
+    hasData.current = !!freshCache;
+  }
 
   useEffect(() => {
     if (!url) return;
