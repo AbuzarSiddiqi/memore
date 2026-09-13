@@ -122,7 +122,9 @@ export async function ensureHydrated(force = false): Promise<DB> {
             for (const cu of cloudDb.users) {
               const idx = state.users.findIndex((u) => u.id === cu.id);
               if (idx >= 0) {
-                state.users[idx] = { ...state.users[idx], ...cu };
+                // Once a user is onboarded, never revert them back to false
+                const wasOnboarded = !!state.users[idx].onboarded || !!cu.onboarded;
+                state.users[idx] = { ...state.users[idx], ...cu, onboarded: wasOnboarded };
               } else {
                 state.users.push(cu);
               }
@@ -161,7 +163,9 @@ export async function ensureHydrated(force = false): Promise<DB> {
         for (const cu of cloudDb.users) {
           const idx = state.users.findIndex((u) => u.id === cu.id);
           if (idx >= 0) {
-            state.users[idx] = { ...state.users[idx], ...cu };
+            // Once a user is onboarded, never revert them back to false
+            const wasOnboarded = !!state.users[idx].onboarded || !!cu.onboarded;
+            state.users[idx] = { ...state.users[idx], ...cu, onboarded: wasOnboarded };
           } else {
             state.users.push(cu);
           }

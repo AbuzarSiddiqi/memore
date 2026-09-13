@@ -7,8 +7,7 @@ import { MemoreMark, MemoreWordmark, Spark } from "@/components/brand";
 export default async function Splash() {
   const store = await cookies();
   const isLoggedOut = store.get("logged_out")?.value === "1";
-  const token = store.get(SESSION_COOKIE)?.value;
-  if (token && !isLoggedOut) {
+  if (!isLoggedOut) {
     const user = await currentUser();
     if (user) redirect(user.onboarded ? "/home" : "/onboarding");
   }

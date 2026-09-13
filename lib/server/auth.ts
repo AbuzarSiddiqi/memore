@@ -102,7 +102,13 @@ export async function currentUser(): Promise<Profile | null> {
           }
         } catch {}
       }
-      if (user && !user.suspended) return user;
+      if (user) {
+        if (!user.onboarded && (user.interests?.length > 0 || db().holdings.some((h) => h.user_id === user!.id) || db().transactions.some((t) => t.user_id === user!.id))) {
+          user.onboarded = true;
+          save();
+        }
+        if (!user.suspended) return user;
+      }
     }
   }
 
@@ -175,7 +181,13 @@ export async function currentUser(): Promise<Profile | null> {
           db().users.push(user);
           save();
         }
-        if (!user.suspended) return user;
+        if (user) {
+          if (!user.onboarded && (user.interests?.length > 0 || db().holdings.some((h) => h.user_id === user!.id) || db().transactions.some((t) => t.user_id === user!.id))) {
+            user.onboarded = true;
+            save();
+          }
+          if (!user.suspended) return user;
+        }
       }
     }
   } catch {

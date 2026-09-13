@@ -1,6 +1,6 @@
 "use client";
 // MEMORE onboarding — 3 steps: Don't Just Scroll. Invest. → Pick Your Vibe → You're In.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, useSession, useToast } from "@/lib/client";
@@ -46,10 +46,17 @@ const FEATURES = [
 export default function Onboarding() {
   const router = useRouter();
   const toast = useToast();
-  const { refresh } = useSession();
+  const { user, refresh } = useSession();
   const [step, setStep] = useState(0);
   const [vibes, setVibes] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+
+  // If user is already onboarded, send them to home immediately
+  useEffect(() => {
+    if (user?.onboarded) {
+      router.replace("/home");
+    }
+  }, [user, router]);
 
   const finish = async () => {
     setBusy(true);
@@ -64,6 +71,20 @@ export default function Onboarding() {
     }
   };
 
+  const skip = async () => {
+    setBusy(true);
+    try {
+      const interests = vibes.length > 0
+        ? [...new Set(vibes.flatMap((v) => VIBE_TO_INTERESTS[v] ?? []))].slice(0, 6)
+        : ["random/chaos", "college", "programming"];
+      await api("/api/auth/onboard", { json: { interests } });
+      await refresh();
+      router.replace("/home");
+    } catch {
+      router.replace("/home");
+    }
+  };
+
   const toggle = (id: string) =>
     setVibes((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : cur.length < 5 ? [...cur, id] : cur));
 
@@ -72,7 +93,7 @@ export default function Onboarding() {
       {/* progress header */}
       <div className="flex items-center justify-between mb-6">
         {step === 0 ? (
-          <Link href="/" className="text-sm muted hover:text-white">Skip</Link>
+          <button onClick={skip} className="text-sm muted hover:text-white" disabled={busy}>Skip</button>
         ) : (
           <button onClick={() => setStep((s) => s - 1)} className="text-xl" aria-label="Back">←</button>
         )}
@@ -87,7 +108,7 @@ export default function Onboarding() {
           </div>
         )}
         {step === 0 && <span />}
-        <button onClick={() => setStep(3)} className="text-sm muted hover:text-white">{step === 0 ? "" : "Skip"}</button>
+        <button onClick={skip} className="text-sm muted hover:text-white" disabled={busy}>{step === 0 ? "" : "Skip"}</button>
       </div>
 
       {step === 0 && (
