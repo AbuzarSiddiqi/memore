@@ -141,6 +141,8 @@ function VideoSlide({
   onInvest,
   dim,
   dataTick,
+  muted,
+  onToggleMute,
 }: {
   meme: MemeView;
   idx: number;
@@ -151,13 +153,15 @@ function VideoSlide({
   onInvest: () => void;
   dim: boolean;
   dataTick: number;
+  muted: boolean;
+  onToggleMute: () => void;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const [muted, setMuted] = useState(true); // Start muted so all modern mobile browsers guarantee instant autoplay
   const [paused, setPaused] = useState(false);
   const [progress, setProgress] = useState(0);
   const [videoReady, setVideoReady] = useState(false);
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const { events, tap, myInvested } = useTapInvest(meme, { prefix: "reel" });
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const overlayDim = commentsOpen || dim;
@@ -171,15 +175,22 @@ function VideoSlide({
   const posterUrl = !isVideoThumb && meme.thumbnail_url ? meme.thumbnail_url : undefined;
   const videoSrc = meme.media_url?.includes("#") ? meme.media_url : `${meme.media_url}#t=0.001`;
 
+  // Effective muted state: if user wants sound on (!muted) but browser blocked unmuted autoplay,
+  // temporarily play muted so reel does not stall, and invite user to tap for sound
+  const isMutedNow = muted || autoplayBlocked;
+
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
     if (active && !paused) {
       v.muted = muted;
       v.play().catch(() => {
-        setMuted(true);
-        v.muted = true;
-        v.play().catch(() => {});
+        // If unmuted playback was blocked by browser policy on initial load, fallback to muted
+        if (!muted) {
+          setAutoplayBlocked(true);
+          v.muted = true;
+          v.play().catch(() => {});
+        }
       });
     } else {
       v.pause();
@@ -187,19 +198,43 @@ function VideoSlide({
   }, [active, paused, muted]);
 
   useEffect(() => {
-    if (ref.current) ref.current.muted = muted;
-  }, [muted]);
+    if (ref.current) {
+      ref.current.muted = isMutedNow;
+    }
+  }, [isMutedNow]);
+
+  // When user swipes to this reel, if sound is on, attempt to clear any prior blocked state
+  useEffect(() => {
+    if (active && !muted) {
+      setAutoplayBlocked(false);
+    }
+  }, [active, muted]);
 
   useEffect(() => () => { if (clickTimer.current) clearTimeout(clickTimer.current); }, []);
 
   const toggle = () => {
     const v = ref.current;
     if (!v) return;
-    if (v.paused) { v.play(); setPaused(false); } else { v.pause(); setPaused(true); }
+    if (v.paused) {
+      if (!muted && autoplayBlocked) {
+        setAutoplayBlocked(false);
+        v.muted = false;
+      }
+      v.play();
+      setPaused(false);
+    } else {
+      v.pause();
+      setPaused(true);
+    }
   };
 
   const handleClick = (e: React.MouseEvent) => {
     if (commentsOpen) return;
+    // Any tap on the reel unlocks unmuted sound if browser had temporarily blocked it
+    if (!muted && autoplayBlocked && ref.current) {
+      setAutoplayBlocked(false);
+      ref.current.muted = false;
+    }
     if (clickTimer.current) {
       // Double tap: invest, cancel the pending single-tap play/pause.
       clearTimeout(clickTimer.current);
@@ -222,7 +257,7 @@ function VideoSlide({
           ref={ref}
           src={videoSrc}
           poster={posterUrl}
-          muted={muted}
+          muted={isMutedNow}
           loop
           playsInline
           preload={preloadMode}
@@ -253,11 +288,19 @@ function VideoSlide({
           <div className={`absolute top-16 right-3.5 z-20 reel-fade ${overlayDim ? "reel-hidden" : "reel-shown"}`}>
             <button
               className="neo-btn sm !bg-black/55 !border-0 text-white backdrop-blur-sm !rounded-full !px-3 !py-1 text-[11px] gap-1.5 pointer-events-auto"
-              onClick={(e) => { e.stopPropagation(); setMuted((m) => !m); }}
-              aria-label={muted ? "Unmute" : "Mute"}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (autoplayBlocked) {
+                  setAutoplayBlocked(false);
+                  if (ref.current) ref.current.muted = false;
+                } else {
+                  onToggleMute();
+                }
+              }}
+              aria-label={isMutedNow ? "Turn sound on" : "Turn sound off"}
             >
-              <Icon name={muted ? "volume-off" : "volume-on"} size={14} />
-              <span>{muted ? "Tap for sound" : "Sound on"}</span>
+              <Icon name={isMutedNow ? "volume-off" : "volume-on"} size={14} />
+              <span>{isMutedNow ? (autoplayBlocked ? "Tap for sound" : "Sound off") : "Sound on"}</span>
             </button>
           </div>
         )}
@@ -266,10 +309,18 @@ function VideoSlide({
           <div className={`absolute inset-0 flex flex-col items-center justify-center gap-3.5 pointer-events-none z-20 reel-fade ${dim ? "reel-hidden" : "reel-shown"}`}>
             <button
               className="neo-btn icon pointer-events-auto !bg-black/55 !border-0 !w-11 !h-11 !rounded-full text-white backdrop-blur-sm"
-              onClick={(e) => { e.stopPropagation(); setMuted((m) => !m); }}
-              aria-label={muted ? "Unmute" : "Mute"}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (autoplayBlocked) {
+                  setAutoplayBlocked(false);
+                  if (ref.current) ref.current.muted = false;
+                } else {
+                  onToggleMute();
+                }
+              }}
+              aria-label={isMutedNow ? "Turn sound on" : "Turn sound off"}
             >
-              <Icon name={muted ? "volume-off" : "volume-on"} size={18} />
+              <Icon name={isMutedNow ? "volume-off" : "volume-on"} size={18} />
             </button>
             <button
               className="neo-btn icon pointer-events-auto !bg-black/55 !border-0 !w-16 !h-16 !rounded-full text-white backdrop-blur-sm"
@@ -371,6 +422,27 @@ export default function ReelsPage() {
   const [uiIdle, setUiIdle] = useState(false);
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Audio of reel is ON by default until explicitly turned off by the user
+  const [muted, setMuted] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const stored = localStorage.getItem("memore_reels_muted");
+        if (stored !== null) return stored === "true";
+      } catch {}
+    }
+    return false; // Sound ON by default
+  });
+
+  const toggleMute = useCallback(() => {
+    setMuted((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("memore_reels_muted", next ? "true" : "false");
+      } catch {}
+      return next;
+    });
+  }, []);
 
   // Async fallback from IndexedDB if memory cache wasn't populated yet
   useEffect(() => {
@@ -480,7 +552,7 @@ export default function ReelsPage() {
         {memes.map((m, i) => (
           <div key={m.id} data-idx={i} className="h-full w-full snap-start snap-always">
             {m.source === "instagram" ? <InstagramSlide meme={m} commentsOpen={commentsFor?.id === m.id} onComments={() => setCommentsFor(m)} onInvest={() => setInvestFor(m)} dim={uiIdle} />
-              : m.media_type === "video" ? <VideoSlide meme={m} idx={i} activeIndex={active} active={i === active} commentsOpen={commentsFor?.id === m.id} onComments={() => setCommentsFor(m)} onInvest={() => setInvestFor(m)} dim={uiIdle} dataTick={dataTick} />
+              : m.media_type === "video" ? <VideoSlide meme={m} idx={i} activeIndex={active} active={i === active} commentsOpen={commentsFor?.id === m.id} onComments={() => setCommentsFor(m)} onInvest={() => setInvestFor(m)} dim={uiIdle} dataTick={dataTick} muted={muted} onToggleMute={toggleMute} />
                 : <ImageSlide meme={m} active={i === active} commentsOpen={commentsFor?.id === m.id} onComments={() => setCommentsFor(m)} onInvest={() => setInvestFor(m)} dim={uiIdle} dataTick={dataTick} />}
           </div>
         ))}

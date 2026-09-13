@@ -123,7 +123,7 @@ export function memeView(m: Meme, viewerId?: string | null): MemeView {
   if (spark.length < 2) spark.push(m.open_price_24h, m.current_price);
   return {
     ...m,
-    creator: publicUser(creator),
+    creator: publicUser(creator, viewerId),
     change_24h: change24h(m),
     change_all: changeAll(m),
     investor_count: d.holdings.filter((h) => h.meme_id === m.id && h.quantity > 1e-9).length,

@@ -315,12 +315,15 @@ export default function MemeDetail({ params }: { params: Promise<{ id: string }>
 function FollowInline({ username, initial }: { username: string; initial: boolean }) {
   const { user, refresh } = useSession();
   const toast = useToast();
-  const [following, setFollowing] = useState<boolean | null>(initial);
+  const [localFollowing, setLocalFollowing] = useState<boolean | null>(initial);
+  const following = localFollowing;
   const follow = async () => {
     if (!user) return toast("Log in first.", "err");
-    const r = await api<{ following: boolean }>(`/api/users/${username}/follow`, { method: "POST" });
-    setFollowing(r.following);
-    refresh();
+    try {
+      const r = await api<{ following: boolean }>(`/api/users/${username}/follow`, { json: { follow: !following } });
+      setLocalFollowing(r.following);
+      refresh();
+    } catch (e) { toast((e as Error).message, "err"); }
   };
   if (user?.username === username) return null;
   return (

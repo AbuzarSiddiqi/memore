@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { db } from "@/lib/server/db";
+import { db, ensureHydrated } from "@/lib/server/db";
 import { ok, fail, requireUser } from "@/lib/server/http";
 import { memeView, publicUser } from "@/lib/server/views";
 import { userBySlug } from "@/lib/server/auth";
@@ -7,6 +7,7 @@ import { biggestWinsLosses, predictionIQ, rankOf, seasonInfo } from "@/lib/serve
 import { change24h } from "@/lib/server/market";
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ username: string }> }) {
+  await ensureHydrated();
   const viewer = await requireUser();
   const { username } = await ctx.params;
   const user = userBySlug(username);

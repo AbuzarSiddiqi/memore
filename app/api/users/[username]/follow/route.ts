@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { db, save } from "@/lib/server/db";
+import { db, save, ensureHydrated } from "@/lib/server/db";
 import { ok, fail, requireUser } from "@/lib/server/http";
 import { publicUser } from "@/lib/server/views";
 import { userBySlug } from "@/lib/server/auth";
@@ -7,6 +7,7 @@ import { pushNotification } from "@/lib/server/notify";
 import { syncFollowToSupabase, deleteFollowFromSupabase, toCanonicalUuid } from "@/lib/server/sync";
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ username: string }> }) {
+  await ensureHydrated();
   const user = await requireUser();
   if (!user) return fail("Log in first.", 401);
   const { username } = await ctx.params;

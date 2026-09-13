@@ -67,6 +67,17 @@ export function normalizeDbUuids(d: DB) {
       r.user_id = toCanonicalUuid(r.user_id);
     }
   }
+  if (d.follows) {
+    for (const f of d.follows) {
+      f.follower_id = toCanonicalUuid(f.follower_id);
+      f.following_id = toCanonicalUuid(f.following_id);
+    }
+  }
+  if (d.saved_memes) {
+    for (const sm of d.saved_memes) {
+      sm.user_id = toCanonicalUuid(sm.user_id);
+    }
+  }
 }
 
 export function resetToEmpty(): DB {

@@ -1,9 +1,10 @@
 import { NextRequest } from "next/server";
-import { db } from "@/lib/server/db";
+import { db, ensureHydrated } from "@/lib/server/db";
 import { ok, requireUser } from "@/lib/server/http";
 import { memeView, publicUser } from "@/lib/server/views";
 
 export async function GET(req: NextRequest) {
+  await ensureHydrated();
   const viewer = await requireUser();
   const q = (new URL(req.url).searchParams.get("q") ?? "").trim().toLowerCase();
   if (q.length < 2) return ok({ memes: [], users: [], hashtags: [] });
