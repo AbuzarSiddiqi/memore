@@ -1,6 +1,7 @@
 // Notifications + achievements. Kept small and side-effect friendly.
 import { db, save, uid } from "./db";
-import type { NotificationType } from "../types";
+import { syncNotificationToSupabase } from "./sync";
+import type { NotificationType, AuraNotification } from "../types";
 
 export function pushNotification(
   userId: string,
@@ -19,13 +20,16 @@ export function pushNotification(
     )
   )
     return;
-  d.notifications.push({
+  const notif: AuraNotification = {
     id: uid(), user_id: userId, type, title, message, meme_id: memeId,
     read: false, created_at: new Date().toISOString(),
-  });
+  };
+  d.notifications.push(notif);
   if (d.notifications.length > 800) d.notifications.splice(0, d.notifications.length - 800);
   save();
+  void syncNotificationToSupabase(notif);
 }
+
 
 export const ACHIEVEMENTS = [
   { id: "first-invest", name: "First Investment", description: "Make your first investment.", icon: "🪙" },

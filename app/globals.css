@@ -58,6 +58,35 @@
   }
 }
 
+/* Mobile touch & long-press text selection prevention for chat (PART 12) */
+.msg-press,
+.chat-screen .msg-press,
+.chat-screen .react-tray,
+.chat-screen [data-msg-bubble],
+.chat-screen .reaction-stamp {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+  touch-action: pan-y;
+}
+
+.chat-screen .msg-press * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+/* Ensure composer and general text remain selectable */
+.chat-screen input,
+.chat-screen textarea,
+.chat-screen [contenteditable="true"] {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+  -webkit-touch-callout: default !important;
+}
+
+
 /* Safe area aware layout helpers */
 .app-header-spacer {
   height: var(--app-header-h);

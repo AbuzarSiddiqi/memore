@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { db, save } from "@/lib/server/db";
 import { ok, fail, requireUser } from "@/lib/server/http";
+import { syncSavedMemeToSupabase, deleteSavedMemeFromSupabase, syncMemeToSupabase, toCanonicalUuid } from "@/lib/server/sync";
 
 export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const user = await requireUser();
@@ -9,15 +10,29 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
   const meme = db().memes.find((m) => m.id === id && m.status === "live");
   if (!meme) return fail("That meme is no longer available.", 404);
   const d = db();
-  const existing = d.saved_memes.find((s) => s.user_id === user.id && s.meme_id === id);
-  if (existing) {
-    d.saved_memes = d.saved_memes.filter((s) => s !== existing);
+  const canonUserId = toCanonicalUuid(user.id);
+  const existingIdx = d.saved_memes.findIndex(
+    (s) => toCanonicalUuid(s.user_id) === canonUserId && s.meme_id === id
+  );
+
+  if (existingIdx >= 0) {
+    d.saved_memes.splice(existingIdx, 1);
     meme.saves = Math.max(0, meme.saves - 1);
     save();
-    return ok({ saved: false });
+    await Promise.allSettled([
+      deleteSavedMemeFromSupabase(canonUserId, id),
+      syncMemeToSupabase(meme),
+    ]);
+    return ok({ saved: false, saves_count: meme.saves });
   }
-  d.saved_memes.push({ user_id: user.id, meme_id: id, created_at: new Date().toISOString() });
+
+  d.saved_memes.push({ user_id: canonUserId, meme_id: id, created_at: new Date().toISOString() });
   meme.saves += 1;
   save();
-  return ok({ saved: true });
+  await Promise.allSettled([
+    syncSavedMemeToSupabase(canonUserId, id),
+    syncMemeToSupabase(meme),
+  ]);
+  return ok({ saved: true, saves_count: meme.saves });
 }
+

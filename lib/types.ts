@@ -376,7 +376,9 @@ export interface PublicUser {
   following?: number;
   meme_count?: number;
   is_following?: boolean;
+  follows_you?: boolean;
 }
+
 
 export interface Heat {
   level: HeatLevel;

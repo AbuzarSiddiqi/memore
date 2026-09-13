@@ -4,7 +4,9 @@
 import { db, save, persistNow, uid } from "./db";
 import { pushNotification, unlock } from "./notify";
 import { addXpAndAura } from "./progression";
+import { syncCallToSupabase } from "./sync";
 import type { Meme, MemeLabel, PricePoint, Profile, Holding, Transaction, Heat, HeatLevel, AuraCall } from "../types";
+
 
 export const INITIAL_PRICE = 20;      // every meme launches at ✦20
 export const SELL_SPREAD = 0.96;      // 4% sell spread keeps churn honest
@@ -257,6 +259,7 @@ export function makeCall(user: Profile, meme: Meme, target: "VIRAL" | "FLOP"): A
   pushNotification(user.id, "call_won", target === "VIRAL" ? "📣 Call placed: VIRAL" : "📣 Call placed: FLOP",
     `"${meme.caption}" — resolves in 7 days at ✦${call.price_at_call}.`, meme.id);
   save();
+  void syncCallToSupabase(call);
   return call;
 }
 
@@ -265,10 +268,15 @@ function resolveDueCalls(now: number) {
   for (const call of d.calls) {
     if (call.status !== "open" || new Date(call.resolves_at).getTime() > now) continue;
     const meme = d.memes.find((m) => m.id === call.meme_id);
-    if (!meme) { call.status = "lost"; continue; }
+    if (!meme) {
+      call.status = "lost";
+      void syncCallToSupabase(call);
+      continue;
+    }
     const change = (meme.current_price - call.price_at_call) / call.price_at_call;
     const won = call.target === "VIRAL" ? change >= 0.5 : change <= -0.3;
     call.status = won ? "won" : "lost";
+    void syncCallToSupabase(call);
     const user = d.users.find((u) => u.id === call.user_id);
     if (user) {
       user.reputation += won ? 5 : -2;
@@ -281,6 +289,7 @@ function resolveDueCalls(now: number) {
     }
   }
 }
+
 
 // ---- Battles: stake Aura on which one moons -----------------------------
 export function placeStake(user: Profile, battleId: string, side: "a" | "b") {

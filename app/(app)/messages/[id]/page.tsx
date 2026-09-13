@@ -7,7 +7,8 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { api, useApi, useSession, useToast } from "@/lib/client";
-import { getCachedMessages, appendCachedMessages, purgeExpiredChatLocal, getCachedChats } from "@/lib/client-cache";
+import { getCachedMessages, appendCachedMessages, purgeExpiredChatLocal, getCachedChats, removeCachedMessage, updateCachedMessageReactions } from "@/lib/client-cache";
+
 import type { ChatDetail, ChatMessageView, ChatReplyRef, MemeView } from "@/lib/types";
 import { REACTION_IDS } from "@/lib/reactions";
 import { Avatar, NeoButton, Sheet } from "@/components/ui";
@@ -440,136 +441,231 @@ export default function ChatPage() {
     armClickGuard();
     setClickShield(true);
     window.setTimeout(() => setClickShield(false), 140);
-    if (apply && g) {
-      const rid = favorites[hoverRef.current] ?? favorites[0];
+    if (apply && g && hoverRef.current >= 0 && hoverRef.current < favorites.length) {
+      const rid = favorites[hoverRef.current];
       if (rid) react(g.id, rid);
     }
     gestRef.current = null;
-    hoverRef.current = 0;
+    hoverRef.current = -1;
     setHoverIdx(null);
     setReactTo(null);
     setPickerOpen(false);
   };
 
   /** One gesture handler per reactable message:
-   * tap → nothing · double-tap → R1 · hold 430ms → tray (R1 armed)
-   * hold + glide → slot follows the finger · release → apply
-   * horizontal before the hold → swipe-to-reply · vertical → normal scroll */
+   * tap → nothing · double-tap → R1 · hold 420ms → tray + unsend (Case A: no move = open)
+   * hold + glide → slot follows the finger · release → apply (Case B: slide to select)
+   * vertical movement before hold → normal scroll (Case C) · horizontal → swipe-to-reply */
   const msgGestures = (m: ChatMessageView) => {
-    const dir: 1 | -1 = m.sender_id === user?.id ? -1 : 1; // incoming swipes right, outgoing left
+    const isMine = m.sender_id === user?.id;
+    const dir: 1 | -1 = isMine ? -1 : 1; // incoming swipes right, outgoing left
     return {
       onPointerDown: (e: ReactPointerEvent<HTMLElement>) => {
         if (e.pointerType === "mouse" && e.button !== 0) return;
         if ((e.target as HTMLElement).closest("button, a, input, video")) return;
         clearPress();
         const el = e.currentTarget;
-        try { el.setPointerCapture?.(e.pointerId); } catch { /* capture optional */ }
         gestRef.current = { id: m.id, msg: m, x: e.clientX, y: e.clientY, dir, mode: "idle", dx: 0 };
         reactElRef.current = el;
+        hoverRef.current = -1;
+        setHoverIdx(null);
+
         pressTimer.current = window.setTimeout(() => {
           pressTimer.current = null;
           const g = gestRef.current;
           if (!g || g.mode !== "idle") return;
           g.mode = "react";
-          hoverRef.current = 0;
-          setHoverIdx(0);
-          el.style.touchAction = "none"; // no chat scrolling mid-glide
-          try { navigator.vibrate?.(12); } catch { /* no haptics */ }
+          // Case A & B: Open tray and UNSEND button. DO NOT auto-select reaction.
+          hoverRef.current = -1;
+          setHoverIdx(null);
+          try { navigator.vibrate?.(15); } catch {}
           setReactTo({ msgId: m.id, rect: el.getBoundingClientRect() });
           setPickerOpen(false);
-        }, 430);
+        }, 420);
       },
       onPointerMove: (e: ReactPointerEvent<HTMLElement>) => {
         const g = gestRef.current;
         if (!g || g.id !== m.id) return;
-        if (g.mode === "react") {
-          const centers = trayCentersRef.current;
-          const band = trayBandRef.current;
-          if (!centers || !band) return;
-          if (e.clientY < band.top - 64 || e.clientY > band.bottom + 96 || e.clientX < band.left - 76 || e.clientX > band.right + 76) {
-            finishReact(false); // dragged away — cancel, apply nothing
-            return;
-          }
-          let idx = 0;
-          let best = Infinity;
-          centers.forEach((cx, i) => {
-            const d = Math.abs(e.clientX - cx);
-            if (d < best) { best = d; idx = i; }
-          });
-          if (idx !== hoverRef.current) {
-            hoverRef.current = idx;
-            setHoverIdx(idx);
-            try { navigator.vibrate?.(5); } catch { /* no haptics */ }
-          }
-          return;
-        }
         const dx = e.clientX - g.x;
         const dy = e.clientY - g.y;
+
         if (g.mode === "idle") {
-          if (Math.abs(dx) < 9 && Math.abs(dy) < 9) return;
-          if (Math.abs(dx) < Math.abs(dy) * 0.8 || Math.sign(dx) !== g.dir) {
-            // vertical (scrolling) or wrong direction — stand down
+          // If vertical scroll displacement > 8px before timer: CANCEL long-press! (Allow normal scroll)
+          if (Math.abs(dy) > 8 && Math.abs(dy) >= Math.abs(dx)) {
             gestRef.current = null;
             clearPress();
             return;
           }
-          g.mode = "swipe";
-          g.dx = 0;
-          clearPress(); // movement kills the long-press
-        }
-        g.dx = Math.min(Math.abs(dx), 96);
-        if (g.dx >= REPLY_THRESHOLD) {
-          try { navigator.vibrate?.(11); } catch { /* no haptics */ }
-          setReplyTo(g.msg); // past the threshold the reply is SELECTED immediately
-          gestRef.current = null;
-          setSwipe(null);
+          // Horizontal reply swipe
+          if (Math.abs(dx) > 8 && Math.sign(dx) === g.dir) {
+            g.mode = "swipe";
+            g.dx = 0;
+            clearPress();
+          } else if (Math.abs(dx) > 12) {
+            gestRef.current = null;
+            clearPress();
+            return;
+          }
           return;
         }
-        setSwipe({ msgId: m.id, dx: g.dx });
+
+        if (g.mode === "swipe") {
+          g.dx = Math.min(Math.abs(dx), 96);
+          if (g.dx >= REPLY_THRESHOLD) {
+            try { navigator.vibrate?.(11); } catch {}
+            setReplyTo(g.msg);
+            gestRef.current = null;
+            setSwipe(null);
+            return;
+          }
+          setSwipe({ msgId: m.id, dx: g.dx });
+          return;
+        }
+
+        if (g.mode === "react") {
+          // Slide-to-select proximity hit-testing
+          const x = e.clientX;
+          const y = e.clientY;
+
+          // Check if hovering over unsend button
+          const unsendEl = document.querySelector(".react-tray [data-unsend='true']");
+          if (unsendEl) {
+            const uRect = unsendEl.getBoundingClientRect();
+            if (x >= uRect.left && x <= uRect.right && y >= uRect.top && y <= uRect.bottom) {
+              if (hoverRef.current !== 999) {
+                hoverRef.current = 999;
+                setHoverIdx(null);
+                try { navigator.vibrate?.(6); } catch {}
+              }
+              return;
+            }
+          }
+
+          const centers = trayCentersRef.current;
+          const band = trayBandRef.current;
+          if (centers && band) {
+            if (y >= band.top - 40 && y <= band.bottom + 40 && x >= band.left - 30 && x <= band.right + 30) {
+              let idx = 0;
+              let best = Infinity;
+              centers.forEach((cx, i) => {
+                const d = Math.abs(x - cx);
+                if (d < best) { best = d; idx = i; }
+              });
+              if (idx !== hoverRef.current) {
+                hoverRef.current = idx;
+                setHoverIdx(idx);
+                try { navigator.vibrate?.(6); } catch {}
+              }
+              return;
+            }
+          }
+
+          if (hoverRef.current !== -1) {
+            hoverRef.current = -1;
+            setHoverIdx(null);
+          }
+        }
       },
       onPointerUp: () => {
         const g = gestRef.current;
         clearPress();
         if (g?.mode === "react") {
-          finishReact(true); // release applies the hovered slot
+          if (hoverRef.current === 999) {
+            // Releasing over UNSEND button
+            unsend(g.id);
+            setReactTo(null);
+            setHoverIdx(null);
+          } else if (hoverRef.current >= 0 && hoverRef.current < favorites.length) {
+            // Releasing after sliding over a reaction
+            finishReact(true);
+          } else {
+            // CASE A: Held without moving!
+            // Tray and UNSEND button remain open for direct tapping!
+          }
+          gestRef.current = null;
           return;
         }
+
         if (g && g.mode === "idle") {
           const now = Date.now();
           if (lastTapRef.current && lastTapRef.current.id === m.id && now - lastTapRef.current.t < 320) {
             lastTapRef.current = null;
             gestRef.current = null;
-            try { navigator.vibrate?.(10); } catch { /* no haptics */ }
+            try { navigator.vibrate?.(10); } catch {}
             const rid = favorites[0] ?? "aura";
-            react(m.id, rid); // double-tap → R1 instantly, no tray
+            react(m.id, rid);
             return;
           }
           lastTapRef.current = { id: m.id, t: now };
         }
-        if (g && g.mode === "swipe" && g.dx >= REPLY_THRESHOLD) setReplyTo(g.msg); // safety net
+
+        if (g && g.mode === "swipe" && g.dx >= REPLY_THRESHOLD) {
+          setReplyTo(g.msg);
+        }
         gestRef.current = null;
         setSwipe(null);
       },
       onPointerCancel: () => {
         clearPress();
-        const wasReact = gestRef.current?.mode === "react";
-        if (reactElRef.current) reactElRef.current.style.touchAction = "";
-        if (wasReact) finishReact(false);
         gestRef.current = null;
         setSwipe(null);
       },
-      onContextMenu: (e: { preventDefault: () => void }) => e.preventDefault(),
+      onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
     };
   };
 
   const react = async (msgId: string, reactionId: string) => {
     setReactTo(null);
     setPickerOpen(false);
+    // Optimistic local reaction update
+    setDetail((prev) => {
+      if (!prev) return prev;
+      const targetMsg = prev.messages.find((m) => m.id === msgId);
+      if (!targetMsg) return prev;
+      const currentReactions = targetMsg.reactions || [];
+      const existing = currentReactions.find((r) => r.reaction_id === reactionId);
+      let nextReactions;
+      if (existing?.mine) {
+        // Toggle off
+        nextReactions = currentReactions
+          .map((r) => (r.reaction_id === reactionId ? { ...r, count: r.count - 1, mine: false } : r))
+          .filter((r) => r.count > 0);
+      } else {
+        // Remove previous user reaction if any
+        const cleaned = currentReactions
+          .map((r) => (r.mine ? { ...r, count: r.count - 1, mine: false } : r))
+          .filter((r) => r.count > 0);
+        const idx = cleaned.findIndex((r) => r.reaction_id === reactionId);
+        if (idx >= 0) {
+          cleaned[idx] = { ...cleaned[idx], count: cleaned[idx].count + 1, mine: true };
+          nextReactions = cleaned;
+        } else {
+          nextReactions = [...cleaned, { reaction_id: reactionId, count: 1, mine: true }];
+        }
+      }
+      return {
+        ...prev,
+        messages: prev.messages.map((m) => (m.id === msgId ? { ...m, reactions: nextReactions } : m)),
+      };
+    });
+
     try {
-      await api(`/api/chats/${id}/messages/${msgId}/react`, { json: { reaction_id: reactionId } });
-      await load();
+      const res = await api<{ reactions: any[] }>(`/api/chats/${id}/messages/${msgId}/react`, {
+        json: { reaction_id: reactionId },
+      });
+      if (res?.reactions) {
+        setDetail((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            messages: prev.messages.map((m) => (m.id === msgId ? { ...m, reactions: res.reactions } : m)),
+          };
+        });
+        void updateCachedMessageReactions(id, msgId, res.reactions);
+      }
     } catch (e) {
       toast((e as Error).message, "err");
+      await load();
     }
   };
 
@@ -614,14 +710,25 @@ export default function ChatPage() {
   const unsend = async (msgId: string) => {
     setReactTo(null);
     setPickerOpen(false);
+    // Optimistic local delete
+    setDetail((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        messages: prev.messages.filter((m) => m.id !== msgId),
+      };
+    });
+    void removeCachedMessage(id, msgId);
+
     try {
       await api(`/api/chats/${id}/messages/${msgId}`, { method: "DELETE" });
-      await load();
       toast("Unsent. Gone for good.", "ok");
     } catch (e) {
       toast((e as Error).message, "err");
+      await load();
     }
   };
+
 
   // tap a reply quote → jump to the message it answers
   const [flashId, setFlashId] = useState<string | null>(null);
@@ -943,7 +1050,7 @@ export default function ChatPage() {
       {reactTo && (
         <>
           <div
-            className="absolute inset-0 z-30"
+            className="fixed inset-0 z-[85] bg-black/30 backdrop-blur-[1px]"
             onPointerDown={() => { setReactTo(null); setPickerOpen(false); }}
           />
           <ReactionTray
@@ -951,30 +1058,13 @@ export default function ChatPage() {
             favorites={favorites}
             pickerOpen={pickerOpen}
             hoverIdx={hoverIdx}
+            isMine={reactMine}
+            onUnsend={() => unsend(reactTo.msgId)}
             onPick={(rid) => react(reactTo.msgId, rid)}
             onMore={() => setPickerOpen(true)}
             onSlotsChange={saveSlots}
             onClose={() => { setReactTo(null); setPickerOpen(false); }}
           />
-          {/* unsend lives BELOW the selected message; the message itself is in focus */}
-          {reactMine && (
-            <button
-              onClick={() => unsend(reactTo.msgId)}
-              onPointerDown={(e) => e.stopPropagation()}
-              aria-label="Unsend this message"
-              className="absolute z-40 flex items-center gap-1.5 rounded-full border-2 border-[#FF4D5E]/80 bg-[#1c0e14] px-3 py-1.5 text-[11px] font-bold tracking-wide text-[#FF4D5E] transition-transform active:scale-95"
-              style={{
-                top: Math.min(reactTo.rect.bottom + 10, (typeof window !== "undefined" ? window.innerHeight : 844) - 150),
-                left: Math.min(Math.max(reactTo.rect.left + reactTo.rect.width / 2 - 82, 10), (typeof window !== "undefined" ? window.innerWidth : 390) - 174),
-                boxShadow: "1.5px 2px 0 rgba(10,10,10,0.8)",
-              }}
-            >
-              <svg viewBox="0 0 24 24" width={12} height={12} aria-hidden>
-                <path d="M5 6 L19 6 M9 6 L9 4.4 C 9 3.6, 9.6 3, 10.4 3 L 13.6 3 C 14.4 3, 15 3.6, 15 4.4 L 15 6 M7 6 L 8 19.2 C 8.1 20.2, 8.9 21, 9.9 21 L 14.1 21 C 15.1 21, 15.9 20.2, 16 19.2 L 17 6 M10 10 L 10 17 M14 10 L 14 17" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" fill="none" />
-              </svg>
-              UNSEND · GONE FOR GOOD
-            </button>
-          )}
         </>
       )}
 

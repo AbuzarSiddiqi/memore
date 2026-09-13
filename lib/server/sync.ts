@@ -1,7 +1,8 @@
 // Cloud Synchronization Service — bridges MEMORE in-memory services to Supabase PostgreSQL & Storage.
 // Ensures that investments, balances, memes, and profiles are persisted globally and fetchable across any device.
 import { createAdminClient } from "@/lib/supabase/admin";
-import type { DB, Holding, Meme, Profile, Transaction, Comment } from "../types";
+import type { DB, Holding, Meme, Profile, Transaction, Comment, Follow, SavedMeme, AuraNotification, AuraCall } from "../types";
+
 
 export const CREATOR_UUID_MAP: Record<string, string> = {
   u_dank_vault: "c2539f71-47df-4831-b6f4-f24491a4a5de",
@@ -206,6 +207,158 @@ export async function syncCommentToSupabase(comment: Comment): Promise<void> {
   }
 }
 
+/** Sync follow relationship to Supabase PostgreSQL */
+export async function syncFollowToSupabase(followerId: string, followingId: string): Promise<void> {
+  const admin = createAdminClient();
+  if (!admin) return;
+
+  const canonFollower = toCanonicalUuid(followerId);
+  const canonFollowing = toCanonicalUuid(followingId);
+  if (!canonFollower || !canonFollowing || canonFollower === canonFollowing) return;
+
+  try {
+    await admin.from("follows").upsert(
+      {
+        follower_id: canonFollower,
+        following_id: canonFollowing,
+        created_at: new Date().toISOString(),
+      },
+      { onConflict: "follower_id,following_id" }
+    );
+  } catch (err) {
+    console.error("Supabase syncFollow error:", err);
+  }
+}
+
+/** Remove follow relationship from Supabase PostgreSQL */
+export async function deleteFollowFromSupabase(followerId: string, followingId: string): Promise<void> {
+  const admin = createAdminClient();
+  if (!admin) return;
+
+  const canonFollower = toCanonicalUuid(followerId);
+  const canonFollowing = toCanonicalUuid(followingId);
+  if (!canonFollower || !canonFollowing) return;
+
+  try {
+    await admin.from("follows").delete().match({
+      follower_id: canonFollower,
+      following_id: canonFollowing,
+    });
+  } catch (err) {
+    console.error("Supabase deleteFollow error:", err);
+  }
+}
+
+/** Sync saved meme (watchlist) to Supabase PostgreSQL */
+export async function syncSavedMemeToSupabase(userId: string, memeId: string): Promise<void> {
+  const admin = createAdminClient();
+  if (!admin) return;
+
+  const canonUserId = toCanonicalUuid(userId);
+  if (!canonUserId || !memeId) return;
+
+  try {
+    await admin.from("saved_memes").upsert(
+      {
+        user_id: canonUserId,
+        meme_id: memeId,
+        created_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id,meme_id" }
+    );
+  } catch (err) {
+    console.error("Supabase syncSavedMeme error:", err);
+  }
+}
+
+/** Remove saved meme (watchlist) from Supabase PostgreSQL */
+export async function deleteSavedMemeFromSupabase(userId: string, memeId: string): Promise<void> {
+  const admin = createAdminClient();
+  if (!admin) return;
+
+  const canonUserId = toCanonicalUuid(userId);
+  if (!canonUserId || !memeId) return;
+
+  try {
+    await admin.from("saved_memes").delete().match({
+      user_id: canonUserId,
+      meme_id: memeId,
+    });
+  } catch (err) {
+    console.error("Supabase deleteSavedMeme error:", err);
+  }
+}
+
+/** Sync notification to Supabase PostgreSQL */
+export async function syncNotificationToSupabase(n: AuraNotification): Promise<void> {
+  const admin = createAdminClient();
+  if (!admin) return;
+
+  const canonUserId = toCanonicalUuid(n.user_id);
+  try {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(n.id);
+    await admin.from("notifications").upsert(
+      {
+        id: isUuid ? n.id : undefined,
+        user_id: canonUserId,
+        type: n.type,
+        title: n.title,
+        message: n.message,
+        meme_id: n.meme_id,
+        read: n.read,
+        created_at: n.created_at,
+      },
+      isUuid ? { onConflict: "id" } : undefined
+    );
+  } catch (err) {
+    console.error("Supabase syncNotification error:", err);
+  }
+}
+
+/** Mark notifications as read in Supabase PostgreSQL */
+export async function syncNotificationReadToSupabase(userId: string, notifId?: string): Promise<void> {
+  const admin = createAdminClient();
+  if (!admin) return;
+
+  const canonUserId = toCanonicalUuid(userId);
+  try {
+    let q = admin.from("notifications").update({ read: true }).eq("user_id", canonUserId);
+    if (notifId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(notifId)) {
+      q = q.eq("id", notifId);
+    }
+    await q;
+  } catch (err) {
+    console.error("Supabase syncNotificationRead error:", err);
+  }
+}
+
+/** Sync prediction call to Supabase PostgreSQL */
+export async function syncCallToSupabase(call: AuraCall): Promise<void> {
+  const admin = createAdminClient();
+  if (!admin) return;
+
+  const canonUserId = toCanonicalUuid(call.user_id);
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(call.id);
+  try {
+    await admin.from("calls").upsert(
+      {
+        id: isUuid ? call.id : undefined,
+        user_id: canonUserId,
+        meme_id: call.meme_id,
+        target: call.target,
+        price_at_call: call.price_at_call,
+        status: call.status,
+        resolves_at: call.resolves_at,
+        created_at: call.created_at,
+      },
+      isUuid ? { onConflict: "id" } : undefined
+    );
+  } catch (err) {
+    console.error("Supabase syncCall error:", err);
+  }
+}
+
+
 const CLOUD_STATE_FILE = "cloud_db.json";
 
 /** Persist authoritative cloud snapshot to Supabase Cloud Storage (ensures serverless resilience) */
@@ -237,16 +390,26 @@ export async function hydrateFromSupabase(): Promise<DB | null> {
       { data: dbHoldings },
       { data: dbTransactions },
       { data: dbComments },
+      { data: dbFollows },
+      { data: dbSavedMemes },
+      { data: dbNotifications },
+      { data: dbCalls },
     ] = await Promise.all([
       admin.from("memes").select("*").order("created_at", { ascending: false }),
       admin.from("profiles").select("*"),
       admin.from("holdings").select("*"),
       admin.from("transactions").select("*"),
       admin.from("comments").select("*"),
+      admin.from("follows").select("*"),
+      admin.from("saved_memes").select("*"),
+      admin.from("notifications").select("*").order("created_at", { ascending: false }).limit(300),
+      admin.from("calls").select("*"),
     ]);
     if (memeErr) console.error("[Supabase Sync] Error fetching memes:", memeErr);
 
-    console.log(`[Supabase Sync] Hydrated ${dbMemes?.length || 0} real memes and ${dbProfiles?.length || 0} profiles from PostgreSQL.`);
+    console.log(
+      `[Supabase Sync] Hydrated ${dbMemes?.length || 0} memes, ${dbProfiles?.length || 0} profiles, ${dbFollows?.length || 0} follows, ${dbSavedMemes?.length || 0} saved memes from PostgreSQL.`
+    );
     // Form structured DB object
     const reconstructedMemes: Meme[] = (dbMemes || []).map((m: any) => ({
         id: m.id,
@@ -354,6 +517,40 @@ export async function hydrateFromSupabase(): Promise<DB | null> {
         created_at: c.created_at,
       }));
 
+      const reconstructedFollows: Follow[] = (dbFollows || []).map((f: any) => ({
+        follower_id: f.follower_id,
+        following_id: f.following_id,
+        created_at: f.created_at,
+      }));
+
+      const reconstructedSavedMemes: SavedMeme[] = (dbSavedMemes || []).map((s: any) => ({
+        user_id: s.user_id,
+        meme_id: s.meme_id,
+        created_at: s.created_at,
+      }));
+
+      const reconstructedNotifications: AuraNotification[] = (dbNotifications || []).map((n: any) => ({
+        id: n.id,
+        user_id: n.user_id,
+        type: n.type,
+        title: n.title,
+        message: n.message,
+        meme_id: n.meme_id,
+        read: !!n.read,
+        created_at: n.created_at,
+      }));
+
+      const reconstructedCalls: AuraCall[] = (dbCalls || []).map((c: any) => ({
+        id: c.id,
+        user_id: c.user_id,
+        meme_id: c.meme_id,
+        target: c.target,
+        price_at_call: Number(c.price_at_call),
+        status: c.status,
+        resolves_at: c.resolves_at,
+        created_at: c.created_at,
+      }));
+
       return {
         users: reconstructedUsers,
         memes: reconstructedMemes,
@@ -361,12 +558,12 @@ export async function hydrateFromSupabase(): Promise<DB | null> {
         transactions: reconstructedTransactions,
         price_history: {},
         comments: reconstructedComments,
-        follows: [],
+        follows: reconstructedFollows,
         remixes: [],
-        calls: [],
+        calls: reconstructedCalls,
         battles: [],
-        notifications: [],
-        saved_memes: [],
+        notifications: reconstructedNotifications,
+        saved_memes: reconstructedSavedMemes,
         reports: [],
         sessions: [],
         chats: [],
@@ -377,6 +574,7 @@ export async function hydrateFromSupabase(): Promise<DB | null> {
         user_daily: [],
         meta: { last_tick: Date.now(), tick_count: 0, version: 2 },
       };
+
   } catch (err) {
     console.error("Supabase hydration error:", err);
   }

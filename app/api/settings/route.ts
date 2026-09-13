@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db, save } from "@/lib/server/db";
 import { ok, fail, requireUser } from "@/lib/server/http";
 import { publicUser } from "@/lib/server/views";
+import { syncProfileToSupabase } from "@/lib/server/sync";
 
 export async function PATCH(req: NextRequest) {
   const user = await requireUser();
@@ -16,5 +17,7 @@ export async function PATCH(req: NextRequest) {
   if (body.avatar_bg != null && /^#[0-9A-Fa-f]{6}$/.test(String(body.avatar_bg))) user.avatar_bg = String(body.avatar_bg);
   if (body.interests != null && Array.isArray(body.interests)) user.interests = body.interests.slice(0, 10);
   save();
+  await syncProfileToSupabase(user);
   return ok({ user: publicUser(user, user.id) });
 }
+

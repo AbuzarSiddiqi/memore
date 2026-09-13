@@ -118,21 +118,7 @@ export async function ensureHydrated(force = false): Promise<DB> {
         try {
           const cloudDb = await hydrateFromSupabase();
           if (cloudDb && state) {
-            state.memes = cloudDb.memes;
-            for (const cu of cloudDb.users) {
-              const idx = state.users.findIndex((u) => u.id === cu.id);
-              if (idx >= 0) {
-                // Once a user is onboarded, never revert them back to false
-                const wasOnboarded = !!state.users[idx].onboarded || !!cu.onboarded;
-                state.users[idx] = { ...state.users[idx], ...cu, onboarded: wasOnboarded };
-              } else {
-                state.users.push(cu);
-              }
-            }
-            if (cloudDb.holdings?.length) state.holdings = cloudDb.holdings;
-            if (cloudDb.transactions?.length) state.transactions = cloudDb.transactions;
-            if (cloudDb.comments?.length) state.comments = cloudDb.comments;
-            normalizeDbUuids(state);
+            mergeCloudDbIntoState(state, cloudDb);
             lastCloudSyncAt = Date.now();
             save();
           }
@@ -156,25 +142,7 @@ export async function ensureHydrated(force = false): Promise<DB> {
     try {
       const cloudDb = await hydrateFromSupabase();
       if (cloudDb && state) {
-        // Authoritative memes directly from Supabase PostgreSQL (ordered newest first)
-        state.memes = cloudDb.memes;
-
-        // Merge users/profiles
-        for (const cu of cloudDb.users) {
-          const idx = state.users.findIndex((u) => u.id === cu.id);
-          if (idx >= 0) {
-            // Once a user is onboarded, never revert them back to false
-            const wasOnboarded = !!state.users[idx].onboarded || !!cu.onboarded;
-            state.users[idx] = { ...state.users[idx], ...cu, onboarded: wasOnboarded };
-          } else {
-            state.users.push(cu);
-          }
-        }
-        if (cloudDb.holdings?.length) state.holdings = cloudDb.holdings;
-        if (cloudDb.transactions?.length) state.transactions = cloudDb.transactions;
-        if (cloudDb.comments?.length) state.comments = cloudDb.comments;
-
-        normalizeDbUuids(state);
+        mergeCloudDbIntoState(state, cloudDb);
         lastCloudSyncAt = Date.now();
         save();
       }
@@ -189,6 +157,71 @@ export async function ensureHydrated(force = false): Promise<DB> {
   try { await inFlightSync; } catch {}
   return current;
 }
+
+function mergeCloudDbIntoState(s: DB, cloudDb: DB) {
+  // Authoritative memes directly from Supabase PostgreSQL (ordered newest first)
+  s.memes = cloudDb.memes;
+
+  // Merge users/profiles
+  for (const cu of cloudDb.users) {
+    const idx = s.users.findIndex((u) => u.id === cu.id);
+    if (idx >= 0) {
+      const wasOnboarded = !!s.users[idx].onboarded || !!cu.onboarded;
+      s.users[idx] = { ...s.users[idx], ...cu, onboarded: wasOnboarded };
+    } else {
+      s.users.push(cu);
+    }
+  }
+
+  if (cloudDb.holdings?.length) s.holdings = cloudDb.holdings;
+  if (cloudDb.transactions?.length) s.transactions = cloudDb.transactions;
+  if (cloudDb.comments?.length) s.comments = cloudDb.comments;
+
+  // Merge follows (authoritative from Supabase)
+  if (cloudDb.follows) {
+    const followMap = new Map<string, typeof s.follows[0]>();
+    for (const f of s.follows || []) {
+      followMap.set(`${toCanonicalUuid(f.follower_id)}:${toCanonicalUuid(f.following_id)}`, f);
+    }
+    for (const f of cloudDb.follows) {
+      followMap.set(`${toCanonicalUuid(f.follower_id)}:${toCanonicalUuid(f.following_id)}`, f);
+    }
+    s.follows = Array.from(followMap.values());
+  }
+
+  // Merge saved_memes (authoritative from Supabase)
+  if (cloudDb.saved_memes) {
+    const saveMap = new Map<string, typeof s.saved_memes[0]>();
+    for (const sm of s.saved_memes || []) {
+      saveMap.set(`${toCanonicalUuid(sm.user_id)}:${sm.meme_id}`, sm);
+    }
+    for (const sm of cloudDb.saved_memes) {
+      saveMap.set(`${toCanonicalUuid(sm.user_id)}:${sm.meme_id}`, sm);
+    }
+    s.saved_memes = Array.from(saveMap.values());
+  }
+
+  // Merge notifications
+  if (cloudDb.notifications) {
+    const notifMap = new Map<string, typeof s.notifications[0]>();
+    for (const n of s.notifications || []) notifMap.set(n.id, n);
+    for (const n of cloudDb.notifications) notifMap.set(n.id, n);
+    s.notifications = Array.from(notifMap.values())
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .slice(0, 500);
+  }
+
+  // Merge calls
+  if (cloudDb.calls) {
+    const callMap = new Map<string, typeof s.calls[0]>();
+    for (const c of s.calls || []) callMap.set(c.id, c);
+    for (const c of cloudDb.calls) callMap.set(c.id, c);
+    s.calls = Array.from(callMap.values());
+  }
+
+  normalizeDbUuids(s);
+}
+
 
 export function save() {
   if (saveTimer) clearTimeout(saveTimer);

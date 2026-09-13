@@ -2,10 +2,13 @@
 import { db } from "./db";
 import { change24h, changeAll, heatOf, labelFor, round1 } from "./market";
 import { predictionIQ, titleFor } from "./progression";
+import { toCanonicalUuid } from "./sync";
 import type { AuraCall, Meme, MemeView, PositionView, Profile, PublicUser } from "../types";
 
 export function publicUser(u: Profile, viewerId?: string | null): PublicUser {
   const d = db();
+  const canonUserId = toCanonicalUuid(u.id);
+  const canonViewerId = viewerId ? toCanonicalUuid(viewerId) : null;
   return {
     id: u.id,
     username: u.username,
@@ -26,14 +29,18 @@ export function publicUser(u: Profile, viewerId?: string | null): PublicUser {
     prediction_iq: predictionIQ(u.id),
     title: titleFor(u.id),
     created_at: u.created_at,
-    followers: d.follows.filter((f) => f.following_id === u.id).length,
-    following: d.follows.filter((f) => f.follower_id === u.id).length,
-    meme_count: d.memes.filter((m) => m.creator_id === u.id && m.status === "live").length,
-    is_following: viewerId
-      ? d.follows.some((f) => f.follower_id === viewerId && f.following_id === u.id)
+    followers: d.follows.filter((f) => toCanonicalUuid(f.following_id) === canonUserId).length,
+    following: d.follows.filter((f) => toCanonicalUuid(f.follower_id) === canonUserId).length,
+    meme_count: d.memes.filter((m) => toCanonicalUuid(m.creator_id) === canonUserId && m.status === "live").length,
+    is_following: canonViewerId
+      ? d.follows.some((f) => toCanonicalUuid(f.follower_id) === canonViewerId && toCanonicalUuid(f.following_id) === canonUserId)
+      : undefined,
+    follows_you: canonViewerId
+      ? d.follows.some((f) => toCanonicalUuid(f.follower_id) === canonUserId && toCanonicalUuid(f.following_id) === canonViewerId)
       : undefined,
   };
 }
+
 
 export function positionFor(userId: string | null | undefined, memeId: string): PositionView | null {
   if (!userId) return null;

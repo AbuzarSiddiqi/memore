@@ -6,7 +6,8 @@ import Link from "next/link";
 import { api, fmtAura, fmtPct, timeAgo, useApi, useSession, useToast } from "@/lib/client";
 import { getCachedProfile, setCachedProfile } from "@/lib/client-cache";
 import type { Meme, MemeView, PublicUser } from "@/lib/types";
-import { Avatar, ChangePct, EmptyState, NeoButton, NeoCard, Skeleton } from "@/components/ui";
+import { Avatar, ChangePct, EmptyState, NeoButton, NeoCard, Skeleton, Sheet } from "@/components/ui";
+
 import { MemeCard } from "@/components/meme";
 import { NavIcon } from "@/components/nav";
 
@@ -46,6 +47,9 @@ export default function ProfilePage({ params }: { params: Promise<{ username: st
   const toast = useToast();
   const [tab, setTab] = useState<(typeof TABS)[number]>("Posts");
   const [following, setFollowing] = useState<boolean | null>(null);
+  const [socialSheet, setSocialSheet] = useState<"followers" | "following" | null>(null);
+  const [socialUsers, setSocialUsers] = useState<PublicUser[]>([]);
+  const [socialLoading, setSocialLoading] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -74,12 +78,77 @@ export default function ProfilePage({ params }: { params: Promise<{ username: st
   const isFollowing = following ?? !!u.is_following;
   const titlePill = u.title ? TITLE_PILLS[u.title] : null;
 
+  const openSocialList = async (type: "followers" | "following") => {
+    setSocialSheet(type);
+    setSocialLoading(true);
+    try {
+      const res = await api<{ followers?: PublicUser[]; following?: PublicUser[] }>(`/api/users/${username}/${type}`);
+      setSocialUsers(type === "followers" ? (res.followers ?? []) : (res.following ?? []));
+    } catch {
+      setSocialUsers([]);
+    } finally {
+      setSocialLoading(false);
+    }
+  };
+
   const follow = async () => {
     if (!me) return toast("Log in first.", "err");
+    const prevFollowing = isFollowing;
+    const prevFollowers = u.followers ?? 0;
+    const nextFollowing = !prevFollowing;
+    const nextFollowers = Math.max(0, prevFollowers + (nextFollowing ? 1 : -1));
+
+    // Optimistic UI update
+    setFollowing(nextFollowing);
+    if (profile) {
+      setCachedProfileState({
+        ...profile,
+        user: {
+          ...profile.user,
+          is_following: nextFollowing,
+          followers: nextFollowers,
+        },
+      });
+    }
+
     try {
-      const r = await api<{ following: boolean }>(`/api/users/${u.username}/follow`, { json: { follow: !u.is_following } });
+      const r = await api<{
+        following: boolean;
+        follower_count: number;
+        following_count: number;
+        follows_you?: boolean;
+      }>(`/api/users/${u.username}/follow`, { json: { follow: nextFollowing } });
+
       setFollowing(r.following);
-    } catch (e) { toast((e as Error).message, "err"); }
+      if (profile) {
+        const updated: ProfileData = {
+          ...profile,
+          user: {
+            ...profile.user,
+            is_following: r.following,
+            followers: r.follower_count,
+            following: r.following_count,
+            follows_you: r.follows_you ?? profile.user.follows_you,
+          },
+        };
+        setCachedProfileState(updated);
+        void setCachedProfile(username, updated);
+      }
+    } catch (e) {
+      // Rollback on failure
+      setFollowing(prevFollowing);
+      if (profile) {
+        setCachedProfileState({
+          ...profile,
+          user: {
+            ...profile.user,
+            is_following: prevFollowing,
+            followers: prevFollowers,
+          },
+        });
+      }
+      toast((e as Error).message, "err");
+    }
   };
 
   const startChat = async () => {
@@ -120,10 +189,32 @@ export default function ProfilePage({ params }: { params: Promise<{ username: st
         </div>
         <div className="text-[13px] muted">@{u.username}</div>
         <p className="text-[13.5px] mt-1.5">{u.bio || "Investing in memes, not just watching them."}</p>
-        <p className="text-[12.5px] muted mt-1">
-          <b style={{ color: "var(--ink)" }}>{u.followers ?? 0}</b> Followers · <b style={{ color: "var(--ink)" }}>{u.following ?? 0}</b> Following · LVL {u.level}
-        </p>
+        <div className="text-[12.5px] muted mt-1.5 flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => openSocialList("followers")}
+            className="hover:underline transition-opacity active:opacity-70 focus:outline-none"
+            aria-label="View followers"
+          >
+            <b style={{ color: "var(--ink)" }}>{u.followers ?? 0}</b> Followers
+          </button>
+          <span>·</span>
+          <button
+            onClick={() => openSocialList("following")}
+            className="hover:underline transition-opacity active:opacity-70 focus:outline-none"
+            aria-label="View following"
+          >
+            <b style={{ color: "var(--ink)" }}>{u.following ?? 0}</b> Following
+          </button>
+          {u.follows_you && (
+            <span className="pill !text-[9.5px] !py-0.5 !px-2 bg-white/10 text-white/70">
+              Follows you
+            </span>
+          )}
+          <span>·</span>
+          <span>LVL {u.level}</span>
+        </div>
       </div>
+
 
       {/* 3 stat cards */}
       <div className="grid grid-cols-3 gap-2.5 mt-4">
@@ -244,9 +335,73 @@ export default function ProfilePage({ params }: { params: Promise<{ username: st
         <div><div className="aura-num text-base">{profile.creator_stats.memes}</div><div className="text-[10px] muted font-bold uppercase">Memes</div></div>
         <div><div className="aura-num text-base">{fmtPct(profile.win_rate ?? 0, 0)}</div><div className="text-[10px] muted font-bold uppercase">Win rate</div></div>
       </div>
+
+      <Sheet
+        open={socialSheet !== null}
+        onClose={() => setSocialSheet(null)}
+        label={socialSheet === "followers" ? "Followers" : "Following"}
+      >
+        <div className="space-y-3 pb-4">
+          <div className="flex items-center justify-between border-b border-[var(--line)] pb-3">
+            <h2 className="hd text-[17px]">
+              {socialSheet === "followers" ? `Followers (${u.followers ?? 0})` : `Following (${u.following ?? 0})`}
+            </h2>
+          </div>
+          {socialLoading ? (
+            <div className="space-y-2 py-4">
+              <Skeleton className="h-12 w-full rounded-xl" />
+              <Skeleton className="h-12 w-full rounded-xl" />
+            </div>
+          ) : socialUsers.length === 0 ? (
+            <div className="py-8 text-center text-[13px] muted">
+              {socialSheet === "followers" ? "No followers yet." : "Not following anyone yet."}
+            </div>
+          ) : (
+            <div className="space-y-2.5 max-h-[60vh] overflow-y-auto no-scrollbar">
+              {socialUsers.map((su) => (
+                <div key={su.id} className="flex items-center justify-between gap-3 p-2 rounded-xl bg-white/[0.03] border border-[var(--line)]">
+                  <Link
+                    href={`/profile/${su.username}`}
+                    onClick={() => setSocialSheet(null)}
+                    className="flex items-center gap-2.5 min-w-0 flex-1 hover:opacity-85 transition-opacity"
+                  >
+                    <Avatar name={su.display_name} bg={su.avatar_bg} size={36} />
+                    <div className="min-w-0">
+                      <div className="text-[13.5px] font-bold truncate leading-tight">{su.display_name}</div>
+                      <div className="text-[11.5px] muted truncate">@{su.username}</div>
+                    </div>
+                  </Link>
+                  {me?.id !== su.id && (
+                    <NeoButton
+                      size="sm"
+                      variant={su.is_following ? "ghost" : "lime"}
+                      className="!px-3 !py-1 !text-[11px]"
+                      onClick={async () => {
+                        try {
+                          const res = await api<{ following: boolean }>(`/api/users/${su.username}/follow`, {
+                            json: { follow: !su.is_following },
+                          });
+                          setSocialUsers((prev) =>
+                            prev.map((item) => (item.id === su.id ? { ...item, is_following: res.following } : item))
+                          );
+                        } catch (err) {
+                          toast((err as Error).message, "err");
+                        }
+                      }}
+                    >
+                      {su.is_following ? "Following" : "Follow"}
+                    </NeoButton>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </Sheet>
     </div>
   );
 }
+
 
 function MiniStat({ label, value }: { label: string; value: string }) {
   return (

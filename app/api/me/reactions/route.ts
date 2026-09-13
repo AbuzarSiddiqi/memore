@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { requireUser, ok, fail } from "@/lib/server/http";
 import { db, save } from "@/lib/server/db";
 import { REACTION_IDS } from "@/lib/reactions";
+import { syncProfileToSupabase } from "@/lib/server/sync";
 
 // PATCH — save the user's five quick-reaction slots (order = priority).
 // Lives on the account so every device restores the same tray.
@@ -17,5 +18,7 @@ export async function PATCH(req: NextRequest) {
   if (!u) return fail("Log in first.", 401);
   u.active_reactions = clean;
   save();
+  await syncProfileToSupabase(u);
   return ok({ active_reactions: clean });
 }
+

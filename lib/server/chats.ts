@@ -514,12 +514,34 @@ export async function unsendMessage(user: Profile, conversationId: string, messa
   const m = d.chat_messages.find((x) => x.id === messageId && x.conversation_id === c.id);
   if (!m) return { error: "Already gone." };
   if (toCanonicalUuid(m.sender_id) !== canonUserId) return { error: "You can only unsend your own messages.", status: 403 };
+
+  // Delete media if present (PART 17)
+  if (m.media_url) {
+    try {
+      const filename = m.media_url.split("/").pop()?.split("?")[0];
+      if (filename) {
+        const localPath = path.join(uploadsDir, filename);
+        if (fs.existsSync(localPath)) {
+          try { fs.unlinkSync(localPath); } catch {}
+        }
+        const { createAdminClient } = await import("@/lib/supabase/admin");
+        const admin = createAdminClient();
+        if (admin) {
+          void admin.storage.from("memes").remove([filename]);
+        }
+      }
+    } catch (mediaErr) {
+      console.warn("Unsend media deletion warning:", mediaErr);
+    }
+  }
+
   d.chat_messages = d.chat_messages.filter((x) => x.id !== messageId);
   d.message_reactions = d.message_reactions.filter((r) => r.message_id !== messageId);
   save();
   await persistChats(true);
   return { ok: true };
 }
+
 
 export async function markRead(user: Profile, conversationId: string): Promise<boolean> {
   const d = db();

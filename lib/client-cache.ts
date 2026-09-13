@@ -370,6 +370,44 @@ export async function appendCachedMessages(conversationId: string, newMessages: 
   return merged;
 }
 
+export async function removeCachedMessage(conversationId: string, messageId: string): Promise<void> {
+  const mem = getMemoryCache<any[]>(`messages:${conversationId}`);
+  if (mem) {
+    setMemoryCache(`messages:${conversationId}`, mem.filter((m) => m.id !== messageId));
+  }
+  const db = await openClientDb();
+  if (db) {
+    try {
+      const tx = db.transaction("messages", "readwrite");
+      tx.objectStore("messages").delete(messageId);
+    } catch {}
+  }
+}
+
+export async function updateCachedMessageReactions(conversationId: string, messageId: string, reactions: any[]): Promise<void> {
+  const mem = getMemoryCache<any[]>(`messages:${conversationId}`);
+  if (mem) {
+    const updated = mem.map((m) => (m.id === messageId ? { ...m, reactions } : m));
+    setMemoryCache(`messages:${conversationId}`, updated);
+  }
+  const db = await openClientDb();
+  if (db) {
+    try {
+      const tx = db.transaction("messages", "readwrite");
+      const store = tx.objectStore("messages");
+      const req = store.get(messageId);
+      req.onsuccess = () => {
+        if (req.result) {
+          const item = req.result;
+          item.data = { ...item.data, reactions };
+          store.put(item);
+        }
+      };
+    } catch {}
+  }
+}
+
+
 // ---------------------------------------------------------------- 24-Hour Purge & Expiration
 export async function purgeExpiredChatLocal(conversationId: string): Promise<void> {
   deleteMemoryCache(`messages:${conversationId}`);

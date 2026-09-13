@@ -175,15 +175,17 @@ export function ReactionStamps({ reactions, mine, variant = "bubble", onToggle }
 const TRAY_W = 250;
 const TRAY_H = 56;
 
-/** Long-press tray: five FIXED slots + "+". The hovered slot (hold + glide)
- * enlarges with a spring pop; release applies it. "+" opens the customizer. */
+/** Long-press tray: five FIXED slots + "+" + UNSEND (for own messages).
+ * Viewport-clamped, supports direct tap and slide-to-select. */
 export function ReactionTray({
   rect,
   favorites,
   pickerOpen,
   hoverIdx = null,
+  isMine = false,
   onPick,
   onMore,
+  onUnsend,
   onSlotsChange,
   onClose,
 }: {
@@ -191,26 +193,33 @@ export function ReactionTray({
   favorites: string[];
   pickerOpen: boolean;
   hoverIdx?: number | null;
+  isMine?: boolean;
   onPick: (id: string) => void;
   onMore: () => void;
+  onUnsend?: () => void;
   onSlotsChange: (next: string[]) => void;
   onClose: () => void;
 }) {
   const vw = typeof window !== "undefined" ? window.innerWidth : 390;
-  const h = pickerOpen ? 252 : TRAY_H;
-  const below = rect.top < h + 84; // not enough room above (header) → below
-  const top = below ? rect.bottom + 12 : rect.top - h - 12;
-  const left = Math.min(Math.max(rect.left + rect.width / 2 - TRAY_W / 2, 10), vw - TRAY_W - 10);
+  const vh = typeof window !== "undefined" ? window.innerHeight : 844;
+  const baseH = isMine ? 96 : TRAY_H;
+  const h = pickerOpen ? 252 : baseH;
+  const availableAbove = rect.top - 64;
+  const availableBelow = vh - 75 - rect.bottom;
+  const below = availableAbove < h + 10 && availableBelow >= h + 10;
+  let top = below ? rect.bottom + 10 : rect.top - h - 10;
+  top = Math.max(64, Math.min(top, vh - h - 75));
+  const left = Math.min(Math.max(rect.left + rect.width / 2 - TRAY_W / 2, 12), vw - TRAY_W - 12);
   const trayDefs = favorites.map((id) => reactionDef(id)).filter(Boolean) as ReactionDef[];
 
   return (
     <div
-      className="react-tray absolute z-40"
+      className="react-tray fixed z-[90]"
       style={{ top, left, width: TRAY_W }}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="relative" style={{ minHeight: TRAY_H }}>
+      <div className="relative" style={{ minHeight: h }}>
         {/* sketch accents + wobbly charcoal panel */}
         <svg viewBox="0 0 28 28" className="pointer-events-none absolute -left-2 -top-2 h-5 w-5 -rotate-6" aria-hidden>
           <path d="M6 19 C 9 13, 12 9, 17 5 M10 22 C 12 18, 15 14, 18 11" stroke="rgba(150,112,255,0.75)" strokeWidth="2" strokeLinecap="round" fill="none" />
@@ -227,44 +236,70 @@ export function ReactionTray({
         </svg>
 
         {!pickerOpen ? (
-          <div className="relative flex items-center justify-between gap-0.5 px-2.5 py-2">
-            {trayDefs.map((r, i) => {
-              const hovered = hoverIdx === i;
-              return (
+          <div className="relative flex flex-col">
+            <div className="flex items-center justify-between gap-0.5 px-2.5 py-2">
+              {trayDefs.map((r, i) => {
+                const hovered = hoverIdx === i;
+                return (
+                  <button
+                    key={r.id}
+                    data-react={r.id}
+                    data-slot-index={i}
+                    aria-label={r.label}
+                    tabIndex={0}
+                    className={`flex h-[38px] w-[38px] items-center justify-center rounded-xl transition-transform hover:bg-white/5 active:scale-90 ${
+                      hovered ? "scale-[1.22] bg-white/10 ring-2 ring-[#C8FF3D]" : ""
+                    }`}
+                    onClick={() => {
+                      if (Date.now() < clickGuardUntil) return;
+                      onPick(r.id);
+                    }}
+                  >
+                    <span key={hovered ? "h" : "n"} className={`relative inline-block h-[22px] w-[22px] ${hovered ? "react-pop" : ""}`}>
+                      <ReactionGlyph id={r.id} size={22} />
+                    </span>
+                  </button>
+                );
+              })}
+              <span className="mx-0.5 h-6 w-px bg-white/15" aria-hidden />
+              <button
+                aria-label="Customize reactions"
+                tabIndex={0}
+                className="relative flex h-[34px] w-[34px] items-center justify-center text-white/85 transition-transform active:scale-90"
+                onClick={() => {
+                  if (Date.now() < clickGuardUntil) return;
+                  onMore();
+                }}
+              >
+                <svg viewBox="0 0 40 40" className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
+                  <path d="M20 3 C 28.6 2.6, 36.8 8.6, 37 19.6 C 37.4 30, 29.2 37, 19.8 36.6 C 10.4 36.2, 3.4 29.6, 3.7 19.8 C 4 10, 11.4 3.4, 20 3 Z" fill="none" stroke="rgba(255,255,255,0.65)" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+                <svg viewBox="0 0 24 24" width={15} height={15} aria-hidden>
+                  <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            {isMine && onUnsend && (
+              <div className="border-t border-white/10 px-2 py-1.5 flex justify-center">
                 <button
-                  key={r.id}
-                  data-react={r.id}
-                  aria-label={r.label}
-                  className={`flex h-[38px] w-[38px] items-center justify-center rounded-xl transition-transform hover:bg-white/5 active:scale-90 ${
-                    hovered ? "scale-[1.22] bg-white/10 ring-2 ring-[#C8FF3D]" : ""
-                  }`}
+                  type="button"
+                  data-unsend="true"
+                  aria-label="Unsend this message"
+                  tabIndex={0}
                   onClick={() => {
                     if (Date.now() < clickGuardUntil) return;
-                    onPick(r.id);
+                    onUnsend();
                   }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className="flex items-center justify-center gap-1.5 w-full rounded-xl py-1.5 px-3 text-[11px] font-bold tracking-wider text-[#FF4D5E] hover:bg-[#FF4D5E]/15 active:scale-95 transition-all border border-[#FF4D5E]/40"
                 >
-                  <span key={hovered ? "h" : "n"} className={`relative inline-block h-[22px] w-[22px] ${hovered ? "react-pop" : ""}`}>
-                    <ReactionGlyph id={r.id} size={22} />
-                  </span>
+                  <svg viewBox="0 0 24 24" width={12} height={12} aria-hidden>
+                    <path d="M5 6 L19 6 M9 6 L9 4.4 C 9 3.6, 9.6 3, 10.4 3 L 13.6 3 C 14.4 3, 15 3.6, 15 4.4 L 15 6 M7 6 L 8 19.2 C 8.1 20.2, 8.9 21, 9.9 21 L 14.1 21 C 15.1 21, 15.9 20.2, 16 19.2 L 17 6 M10 10 L 10 17 M14 10 L 14 17" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                  </svg>
+                  UNSEND · GONE FOR GOOD
                 </button>
-              );
-            })}
-            <span className="mx-0.5 h-6 w-px bg-white/15" aria-hidden />
-            <button
-              aria-label="Customize reactions"
-              className="relative flex h-[34px] w-[34px] items-center justify-center text-white/85 transition-transform active:scale-90"
-              onClick={() => {
-                if (Date.now() < clickGuardUntil) return;
-                onMore();
-              }}
-            >
-              <svg viewBox="0 0 40 40" className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
-                <path d="M20 3 C 28.6 2.6, 36.8 8.6, 37 19.6 C 37.4 30, 29.2 37, 19.8 36.6 C 10.4 36.2, 3.4 29.6, 3.7 19.8 C 4 10, 11.4 3.4, 20 3 Z" fill="none" stroke="rgba(255,255,255,0.65)" strokeWidth="1.8" strokeLinecap="round" />
-              </svg>
-              <svg viewBox="0 0 24 24" width={15} height={15} aria-hidden>
-                <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
-              </svg>
-            </button>
+              </div>
+            )}
           </div>
         ) : (
           <ReactionCustomizer slots={favorites} onChange={onSlotsChange} />
@@ -283,6 +318,7 @@ export function ReactionTray({
     </div>
   );
 }
+
 
 /** Block the synthetic click that fires right after release-to-apply so it can
  * never double-fire on a tray button or whatever sits beneath the tray. */

@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { db, save } from "@/lib/server/db";
 import { ok, fail, requireUser } from "@/lib/server/http";
 import { chatUnreadTotal, expireChats } from "@/lib/server/chats";
+import { syncNotificationReadToSupabase } from "@/lib/server/sync";
 
 export async function GET() {
   const user = await requireUser();
@@ -28,5 +29,7 @@ export async function POST(req: NextRequest) {
     }
   }
   save();
+  void syncNotificationReadToSupabase(user.id, body.id);
   return ok({ ok: true });
 }
+
