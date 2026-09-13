@@ -25,6 +25,12 @@
 }
 
 :root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --app-header-h: calc(56px + var(--safe-top));
+
   --bg-outer: #0a0a0a;
   --bg-app: #0a0a0a;
   --surface: #131313;
@@ -44,6 +50,21 @@
   --radius-sm: 14px;
   --ink-shadow: 5px 5px 0 rgba(124, 77, 255, 0.16);
   --ink-shadow-sm: 3px 3px 0 rgba(124, 77, 255, 0.14);
+}
+
+@media (min-width: 1024px) {
+  :root {
+    --app-header-h: 0px;
+  }
+}
+
+/* Safe area aware layout helpers */
+.app-header-spacer {
+  height: var(--app-header-h);
+}
+
+.app-header-pad {
+  padding-top: calc(var(--safe-top) + 10px);
 }
 
 /* light scope (Market screen per brand reference) */

@@ -833,7 +833,7 @@ export function CommentsSheet({ meme, onClose, variant = "feed" }: { meme: MemeV
         aria-modal="true"
         aria-label={`Comments · ${meme.caption}`}
         className={`absolute bottom-0 left-0 right-0 mx-auto max-w-[460px] flex flex-col bg-[#131313] border-t border-x border-[#232323] rounded-t-[26px] text-white shadow-[0_-12px_44px_rgba(0,0,0,0.7)] ${closing ? "c-slide-down" : "c-slide-up"}`}
-        style={variant === "reels" ? { top: "calc(64px + 34vh + 12px)" } : { maxHeight: "72vh" }}
+        style={variant === "reels" ? { top: "calc(64px + 34vh + 12px)", paddingBottom: "max(14px, env(safe-area-inset-bottom, 0px))" } : { maxHeight: "72vh", paddingBottom: "max(14px, env(safe-area-inset-bottom, 0px))" }}
       >
         <div className="pt-2.5 pb-1 flex justify-center shrink-0 cursor-pointer" onClick={close} aria-label="Close comments">
           <span className="w-10 h-1 rounded-full bg-white/25" />

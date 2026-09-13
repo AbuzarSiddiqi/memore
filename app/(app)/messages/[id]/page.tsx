@@ -572,7 +572,7 @@ export default function ChatPage() {
 
   if (gone) {
     return (
-      <div className="font-display fixed inset-0 z-[70] bg-[#0b0b0b] flex flex-col items-center justify-center gap-4 text-center px-8" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+      <div className="font-display fixed inset-0 z-[70] bg-[#0b0b0b] flex flex-col items-center justify-center gap-4 text-center px-8" style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}>
         <svg viewBox="0 0 24 24" width={56} height={56} aria-hidden>
           <circle cx="12" cy="13" r="8.5" fill="none" stroke="#C8FF3D" strokeWidth="1.8" strokeLinecap="round" />
           <path d="M12 9v4.2l2.6 1.6M8 3.2 C10 2, 14 2, 16 3.2" fill="none" stroke="#C8FF3D" strokeWidth="1.8" strokeLinecap="round" />
@@ -611,7 +611,7 @@ export default function ChatPage() {
   return (
     <div
       className="chat-screen font-display fixed inset-0 z-[65] bg-[#0b0b0b] text-white flex flex-col"
-      style={{ paddingTop: "env(safe-area-inset-top)", height: kbH ? `calc(100% - ${kbH}px)` : undefined }}
+      style={{ paddingTop: "env(safe-area-inset-top, 0px)", height: kbH ? `calc(100% - ${kbH}px)` : undefined }}
     >
       <ScreenFrame />
       {clickShield && <div className="absolute inset-0 z-[80]" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} />}

@@ -85,7 +85,7 @@ export default function HomePage() {
   return (
     <div>
       {/* tabs */}
-      <div className="sticky top-[57px] lg:top-0 z-30 -mx-4 px-4 pt-1 pb-2.5 bg-[var(--bg-app)]/95 backdrop-blur">
+      <div className="sticky top-[var(--app-header-h)] z-30 -mx-4 px-4 pt-1 pb-2.5 bg-[var(--bg-app)]/95 backdrop-blur">
         <div className="flex gap-2 overflow-x-auto no-scrollbar" role="tablist" aria-label="Feed tabs">
           {TABS.map((t) => (
             <button key={t.id} role="tab" aria-selected={tab === t.id} className={`chip ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>

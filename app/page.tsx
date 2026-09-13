@@ -15,7 +15,7 @@ export default async function Splash() {
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "#C8FF3D" }}>
       {/* top bar */}
-      <header className="flex items-center justify-between px-5 py-5">
+      <header className="flex items-center justify-between px-5 py-5" style={{ paddingTop: "max(20px, calc(env(safe-area-inset-top, 0px) + 16px))" }}>
         <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold tracking-[0.18em] text-black/60">
           <Spark size={12} color="#0a0a0a" /> DON&apos;T LIKE. INVEST.
         </span>
@@ -50,7 +50,7 @@ export default async function Splash() {
       </main>
 
       {/* footer */}
-      <footer className="px-6 pb-7 pt-4 flex items-center justify-between text-black/50 text-[11px]">
+      <footer className="px-6 pb-7 pt-4 flex items-center justify-between text-black/50 text-[11px]" style={{ paddingBottom: "max(24px, calc(env(safe-area-inset-bottom, 0px) + 16px))" }}>
         <span>M = memes · ✦ = aura · ↗ = growth</span>
         <span className="max-w-[190px] text-right leading-snug">Virtual points only. No real money. All glory.</span>
       </footer>

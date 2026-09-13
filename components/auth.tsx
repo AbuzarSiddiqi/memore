@@ -112,7 +112,7 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center px-4 py-10">
+    <div className="min-h-screen flex flex-col items-center justify-center px-4" style={{ paddingTop: "max(32px, calc(env(safe-area-inset-top, 0px) + 24px))", paddingBottom: "max(32px, calc(env(safe-area-inset-bottom, 0px) + 24px))" }}>
       <Link href="/" className="mb-8 flex flex-col items-center gap-3">
         <MemoreMark size={64} />
         <MemoreWordmark size={26} />

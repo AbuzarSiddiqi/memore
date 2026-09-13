@@ -68,7 +68,7 @@ export default function Onboarding() {
     setVibes((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : cur.length < 5 ? [...cur, id] : cur));
 
   return (
-    <div className="min-h-screen flex flex-col px-5 pb-8 pt-5 max-w-md mx-auto">
+    <div className="min-h-screen flex flex-col px-5 max-w-md mx-auto" style={{ paddingTop: "max(20px, calc(env(safe-area-inset-top, 0px) + 16px))", paddingBottom: "max(24px, calc(env(safe-area-inset-bottom, 0px) + 20px))" }}>
       {/* progress header */}
       <div className="flex items-center justify-between mb-6">
         {step === 0 ? (

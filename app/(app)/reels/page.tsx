@@ -76,7 +76,7 @@ function CommentTicker({ memeId, active, refreshKey, onOpen }: { memeId: string;
 /** Same rail as the home feed: ✦ aura button first, then comments/remix/details. */
 function Rail({ meme, onComments, onInvest, dimmed }: { meme: MemeView; onComments: () => void; onInvest: () => void; dimmed?: boolean }) {
   return (
-    <div className={`absolute right-2.5 bottom-28 z-10 flex flex-col gap-2.5 items-center reel-fade ${dimmed ? "reel-hidden" : "reel-shown"}`}>
+    <div className={`absolute right-2.5 z-10 flex flex-col gap-2.5 items-center reel-fade ${dimmed ? "reel-hidden" : "reel-shown"}`} style={{ bottom: "max(112px, calc(env(safe-area-inset-bottom, 0px) + 112px))" }}>
       <button className={railBtn} onClick={(e) => { e.stopPropagation(); onInvest(); }} aria-label="Invest Aura in this meme">
         <Spark size={17} color="#C8FF3D" />
         <span className={railNum} style={{ color: "#C8FF3D" }}>{fmtNum(meme.total_invested)}</span>
@@ -100,7 +100,7 @@ function InfoOverlay({ meme, liveInvested, dimmed, onInvest, children }: { meme:
   const myInvested = liveInvested ?? meme.my_position?.invested_amount ?? 0;
 
   return (
-    <div className="absolute left-3 right-16 bottom-4 space-y-2 z-10">
+    <div className="absolute left-3 right-16 space-y-2 z-10" style={{ bottom: "max(16px, calc(env(safe-area-inset-bottom, 0px) + 16px))" }}>
       {/* ticker (children) stays fully visible even when idle-dimmed */}
       {children}
       <div className={`space-y-2 reel-fade ${dimmed ? "reel-hidden" : "reel-shown"}`}>
@@ -370,7 +370,7 @@ export default function ReelsPage() {
           -webkit-backdrop-filter: blur(14px) saturate(1.15);
         }
       `}</style>
-      <div className={`absolute top-3 left-3 right-3 z-20 flex items-center justify-between reel-fade ${uiIdle ? "reel-hidden" : "reel-shown"}`}>
+      <div className={`absolute left-3 right-3 z-20 flex items-center justify-between reel-fade ${uiIdle ? "reel-hidden" : "reel-shown"}`} style={{ top: "max(12px, calc(env(safe-area-inset-top, 0px) + 8px))" }}>
         <Link href="/home" className="neo-btn sm !bg-black/55 !border-0 text-white backdrop-blur-sm !rounded-full" aria-label="Back to feed">
           <Icon name="arrow-left" size={16} /> Feed
         </Link>

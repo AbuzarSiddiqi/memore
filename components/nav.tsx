@@ -121,7 +121,7 @@ export function BottomNav() {
       {mounted && (
         <div
           className={`nav-erase relative mx-3 mb-3 mx-auto flex max-w-lg items-center bg-[#0b0b0b] px-2 pt-4 ${visible ? "nav-erase-on" : "nav-erase-off"}`}
-          style={{ paddingBottom: "max(14px, env(safe-area-inset-bottom))" }}
+          style={{ paddingBottom: "max(14px, env(safe-area-inset-bottom, 0px))" }}
         >
           <SketchFrame />
           {MOBILE_NAV.map((item) =>
@@ -239,11 +239,11 @@ export function AppHeader() {
   return (
     <>
       {/* the header is fixed for the erase animation — this spacer holds its layout space */}
-      <div className="h-[60px] lg:hidden" aria-hidden />
+      <div className="app-header-spacer lg:hidden shrink-0" aria-hidden />
       <header className="fixed top-0 inset-x-0 z-40 lg:hidden" aria-label="Primary header">
       {mounted && (
-      <div className={`nav-erase bg-[var(--bg-app)] pt-3 pb-2.5 px-4 ${visible ? "nav-erase-on" : "nav-erase-off"}`}>
-      <div className="flex items-center justify-between gap-2">
+      <div className={`nav-erase bg-[var(--bg-app)] app-header-pad pb-2.5 px-4 ${visible ? "nav-erase-on" : "nav-erase-off"}`}>
+      <div className="flex items-center justify-between gap-2 h-9">
         <Link href="/home" aria-label="MEMORE home">
           <MemoreLogo markSize={36} wordSize={21} />
         </Link>
