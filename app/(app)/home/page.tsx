@@ -2,7 +2,8 @@
 // MEMORE Home — media-first feed. DOUBLE-TAP ANY MEME = INVEST ✦1.
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { api, useSession } from "@/lib/client";
+import { api, useOfflineStatus, useSession } from "@/lib/client";
+import { getCachedFeed, setCachedFeed } from "@/lib/client-cache";
 import type { EventView, FeedResponse, MissionView, SeasonView } from "@/lib/types";
 import { MemeCard, VideoMemeCard } from "@/components/meme";
 import { EmptyState, FeedSkeleton } from "@/components/ui";
@@ -20,6 +21,7 @@ const TABS = [
 
 export default function HomePage() {
   const { user } = useSession();
+  const isOffline = useOfflineStatus();
   const [tab, setTab] = useState<string>("foryou");
   const [pages, setPages] = useState<FeedResponse["memes"][]>([]);
   const [page, setPage] = useState(0);
@@ -28,12 +30,35 @@ export default function HomePage() {
   const [missions, setMissions] = useState<MissionView[]>([]);
   const sentinel = useRef<HTMLDivElement>(null);
 
+  // 1. Instant Cache-First Hydration on mount and tab switch
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const cached = await getCachedFeed(tab);
+      if (active && cached && cached.length > 0) {
+        setPages([cached]);
+        setLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, [tab]);
+
   const loadPage = useCallback(async (p: number, t: string, replace: boolean) => {
-    setLoading(true);
+    // Only show full loading if we have no memes for this tab yet
+    if (replace) {
+      const mem = await getCachedFeed(t);
+      if (!mem || mem.length === 0) setLoading(true);
+    }
     try {
       const r = await api<FeedResponse>(`/api/memes?tab=${t}&page=${p}&limit=6`);
       if (r && Array.isArray(r.memes)) {
-        setPages((prev) => (replace ? [r.memes] : [...prev, r.memes]));
+        setPages((prev) => {
+          const next = replace ? [r.memes] : [...prev, r.memes];
+          const all = Array.from(new Map(next.flat().map((m) => [m.id, m])).values());
+          // Update persistent cache for this tab
+          void setCachedFeed(t, all);
+          return next;
+        });
         setHasMore(r.has_more);
       }
     } catch (err) {
@@ -131,12 +156,22 @@ export default function HomePage() {
         </div>
       )}
 
+      {/* offline notice */}
+      {isOffline && (
+        <div className="mb-3 px-3.5 py-2 rounded-2xl border border-[var(--coral)] bg-[#221013] text-[11.5px] font-bold text-white flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-[var(--coral)] animate-pulse" /> OFFLINE — SHOWING CACHED MEMES
+        </div>
+      )}
+
       {/* feed */}
       <div className="space-y-5">
         {memes.map((m) =>
           m.media_type === "video" ? <VideoMemeCard key={m.id} meme={m} onChanged={refresh} /> : <MemeCard key={m.id} meme={m} onChanged={refresh} />
         )}
-        {loading && <FeedSkeleton />}
+        {loading && memes.length === 0 && <FeedSkeleton />}
+        {loading && memes.length > 0 && (
+          <div className="py-4 text-center text-xs muted hd">LOADING MORE MEMES…</div>
+        )}
         {!loading && memes.length === 0 && tab !== "following" && tab !== "hunter" && (
           <EmptyState emoji="🫥" title="No memes found." message="For now." action={<Link href="/create" className="neo-btn primary">Create the first one</Link>} />
         )}

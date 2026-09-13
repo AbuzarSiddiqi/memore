@@ -309,7 +309,11 @@ export async function getOrCreateConversation(user: Profile, otherUsername: stri
   return { conversation, other };
 }
 
-export function getChatDetail(user: Profile, conversationId: string): ChatDetail | { error: string; status?: number } {
+export function getChatDetail(
+  user: Profile,
+  conversationId: string,
+  options?: { after?: string; before?: string; limit?: number }
+): ChatDetail | { error: string; status?: number } {
   const d = db();
   ensureChats(d);
   const canonUserId = toCanonicalUuid(user.id);
@@ -326,13 +330,26 @@ export function getChatDetail(user: Profile, conversationId: string): ChatDetail
   if (!otherProfile) return { error: "Chat not found.", status: 404 };
 
   const otherRead = c.reads?.[oid] ?? "";
-  const convMessages = d.chat_messages
+  let convMessages = d.chat_messages
     .filter((m) => m.conversation_id === c.id)
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
+
+  const isDelta = !!options?.after;
+  if (options?.after) {
+    convMessages = convMessages.filter((m) => m.created_at > options.after!);
+  } else if (options?.before) {
+    convMessages = convMessages.filter((m) => m.created_at < options.before!);
+    const limit = options?.limit ?? 50;
+    convMessages = convMessages.slice(-limit);
+  } else {
+    const limit = options?.limit ?? 50;
+    convMessages = convMessages.slice(-limit);
+  }
+
   const byId = new Map(convMessages.map((m) => [m.id, m]));
   const replyRef = (m: ChatMessage): ChatReplyRef | null => {
     if (!m.reply_to_message_id) return null;
-    const t = byId.get(m.reply_to_message_id);
+    const t = byId.get(m.reply_to_message_id) || d.chat_messages.find((x) => x.id === m.reply_to_message_id);
     if (!t) return null;
     const post = t.type === "post" && t.post_id ? d.memes.find((x) => x.id === t.post_id) : null;
     return {
@@ -354,9 +371,16 @@ export function getChatDetail(user: Profile, conversationId: string): ChatDetail
   }));
 
   return {
-    conversation: { id: c.id, created_at: c.created_at, expires_at: c.expires_at, remaining_ms: Math.max(0, remaining) },
+    conversation: {
+      id: c.id,
+      created_at: c.created_at,
+      expires_at: c.expires_at,
+      remaining_ms: Math.max(0, remaining),
+      other_read_at: otherRead,
+    },
     other: { id: oid, username: otherProfile.username, display_name: otherProfile.display_name, avatar_bg: otherProfile.avatar_bg },
     messages,
+    is_delta: isDelta,
   };
 }
 

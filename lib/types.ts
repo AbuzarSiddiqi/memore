@@ -344,9 +344,10 @@ export interface ChatMessageView extends ChatMessage {
 }
 
 export interface ChatDetail {
-  conversation: { id: string; created_at: string; expires_at: string; remaining_ms: number };
+  conversation: { id: string; created_at: string; expires_at: string; remaining_ms: number; other_read_at?: string };
   other: ChatOtherUser;
   messages: ChatMessageView[];
+  is_delta?: boolean;
 }
 
 // ---------- API payload shapes ----------

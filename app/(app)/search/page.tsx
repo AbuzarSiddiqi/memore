@@ -7,6 +7,8 @@ import { Avatar, ChangePct, EmptyState, NeoCard } from "@/components/ui";
 
 const TRENDING_SEARCHES = ["college", "engineering", "bollywood", "football", "anime", "chai", "css", "monday", "pigeons"];
 
+const searchCache = new Map<string, { data: any; timestamp: number }>();
+
 export default function SearchPage() {
   const { user } = useSession();
   const [q, setQ] = useState("");
@@ -17,12 +19,27 @@ export default function SearchPage() {
   useEffect(() => { inputRef.current?.focus(); }, []);
 
   useEffect(() => {
-    if (q.trim().length < 2) { setResults(null); return; }
+    const norm = q.trim().toLowerCase();
+    if (norm.length < 2) {
+      setResults(null);
+      return;
+    }
+
+    const hit = searchCache.get(norm);
+    if (hit && Date.now() - hit.timestamp < 60_000) {
+      setResults(hit.data);
+      return;
+    }
+
     const t = setTimeout(async () => {
       setLoading(true);
       try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
-        setResults(await res.json());
+        const res = await fetch(`/api/search?q=${encodeURIComponent(norm)}`);
+        if (res.ok) {
+          const data = await res.json();
+          searchCache.set(norm, { data, timestamp: Date.now() });
+          setResults(data);
+        }
       } finally {
         setLoading(false);
       }

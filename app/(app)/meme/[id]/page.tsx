@@ -1,9 +1,10 @@
 "use client";
 // Meme Detail — full-bleed hero, floating rail, purple Invest. DOUBLE-TAP = ✦1.
-import { use, useState } from "react";
+import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, fmtAura, fmtNum, fmtPct, timeAgo, useApi, useSession, useToast } from "@/lib/client";
+import { getCachedMeme, setCachedMeme } from "@/lib/client-cache";
 import type { MemeView, PublicUser, PricePoint } from "@/lib/types";
 import { AreaChart } from "@/components/charts";
 import { Avatar, ChangePct, NeoButton, NeoCard, SectionTitle, Skeleton } from "@/components/ui";
@@ -26,6 +27,7 @@ const RANGES = { "1H": "series_1h", "24H": "series_24h", "7D": "series_7d", "30D
 
 export default function MemeDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const [cachedMeme, setCachedMemeState] = useState<MemeView | null>(null);
   const { data, loading, error, refresh } = useApi<DetailData>(`/api/memes/${id}`);
   const { user, refresh: refreshSession } = useSession();
   const toast = useToast();
@@ -38,7 +40,26 @@ export default function MemeDetail({ params }: { params: Promise<{ id: string }>
   const [saved, setSaved] = useState<boolean | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
 
-  if (loading) {
+  // 1. Instant Cache-First Hydration on mount
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const c = await getCachedMeme(id);
+      if (active && c) setCachedMemeState(c);
+    })();
+    return () => { active = false; };
+  }, [id]);
+
+  useEffect(() => {
+    if (data?.meme) {
+      setCachedMemeState(data.meme);
+      void setCachedMeme(id, data.meme);
+    }
+  }, [data?.meme, id]);
+
+  const m = data?.meme ?? cachedMeme;
+
+  if (loading && !m) {
     return (
       <div className="mt-4 space-y-4">
         <Skeleton className="w-full h-96" />
@@ -46,7 +67,7 @@ export default function MemeDetail({ params }: { params: Promise<{ id: string }>
       </div>
     );
   }
-  if (error || !data) {
+  if (!loading && (error || !m)) {
     return (
       <NeoCard className="mt-10 p-8 text-center">
         <div className="text-4xl mb-2">👻</div>
@@ -55,14 +76,16 @@ export default function MemeDetail({ params }: { params: Promise<{ id: string }>
       </NeoCard>
     );
   }
+  if (!m) return null;
 
-  const m = data.meme;
-  const series = data[RANGES[range]];
+  const series = data ? data[RANGES[range]] : undefined;
   const mine = m.my_position;
   const isSaved = saved ?? !!m.is_saved;
-  const evolutionRoots = data.evolution.filter((e) => !e.parent_meme_id);
-  const remixesOfRoot = data.evolution.filter((e) => e.parent_meme_id === evolutionRoots[0]?.id);
-  const grandChildren = data.evolution.filter((e) => e.parent_meme_id && e.parent_meme_id !== evolutionRoots[0]?.id);
+  const evolutionRoots = (data?.evolution ?? []).filter((e) => !e.parent_meme_id);
+  const remixesOfRoot = (data?.evolution ?? []).filter((e) => e.parent_meme_id === evolutionRoots[0]?.id);
+  const grandChildren = (data?.evolution ?? []).filter((e) => e.parent_meme_id && e.parent_meme_id !== evolutionRoots[0]?.id);
+  const similar = data?.similar ?? [];
+  const investors = data?.investors ?? [];
 
   const save = async () => {
     if (!user) return toast("Log in first.", "err");
@@ -173,7 +196,11 @@ export default function MemeDetail({ params }: { params: Promise<{ id: string }>
         </div>
       </div>
       <NeoCard className="p-4">
-        <AreaChart points={series} up={m.change_all >= 0} />
+        {series ? (
+          <AreaChart points={series} up={m.change_all >= 0} />
+        ) : (
+          <div className="h-44 flex items-center justify-center text-xs muted hd">LOADING AURA CHART…</div>
+        )}
       </NeoCard>
 
       {/* stats row */}
@@ -206,11 +233,11 @@ export default function MemeDetail({ params }: { params: Promise<{ id: string }>
       </NeoCard>
 
       {/* similar */}
-      {data.similar.length > 0 && (
+      {similar.length > 0 && (
         <>
           <SectionTitle>DNA matches</SectionTitle>
           <div className="grid grid-cols-3 gap-2.5">
-            {data.similar.map((s) => (
+            {similar.map((s) => (
               <Link key={s.id} href={`/meme/${s.id}`} className="neo-sm p-2 text-center hover:border-[var(--lime)] transition-colors">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={s.thumbnail_url} alt="" className="w-full h-20 object-cover rounded-lg" loading="lazy" />
@@ -223,7 +250,7 @@ export default function MemeDetail({ params }: { params: Promise<{ id: string }>
       )}
 
       {/* evolution */}
-      {data.evolution.length > 1 && (
+      {(data?.evolution?.length ?? 0) > 1 && (
         <>
           <SectionTitle>Family tree</SectionTitle>
           <NeoCard className="p-5">
@@ -251,23 +278,30 @@ export default function MemeDetail({ params }: { params: Promise<{ id: string }>
       )}
 
       {/* investors */}
-      <SectionTitle>Top investors</SectionTitle>
-      <NeoCard className="p-4">
-        <div className="flex flex-wrap gap-2.5">
-          {data.investors.map((inv) => (
-            <Link key={inv.id} href={`/profile/${inv.username}`} className="flex items-center gap-2 neo-sm px-2.5 py-1.5">
-              <Avatar name={inv.display_name} bg={inv.avatar_bg} size={24} />
-              <span className="text-[11px] hd font-bold">{inv.display_name.toLowerCase().replace(/\s/g, "")}</span>
-              <span className="text-[10px] aura-num muted">{fmtAura(inv.position_value)}</span>
-            </Link>
-          ))}
-          {data.investors.length === 0 && <p className="text-sm muted">No investors yet. Be the first believer.</p>}
-        </div>
-      </NeoCard>
+      {investors.length > 0 && (
+        <>
+          <SectionTitle>Top investors</SectionTitle>
+          <NeoCard className="p-4">
+            <div className="flex flex-wrap gap-2.5">
+              {investors.map((inv) => (
+                <Link key={inv.id} href={`/profile/${inv.username}`} className="flex items-center gap-2 neo-sm px-2.5 py-1.5">
+                  <Avatar name={inv.display_name} bg={inv.avatar_bg} size={24} />
+                  <span className="text-[11px] hd font-bold">{inv.display_name.toLowerCase().replace(/\s/g, "")}</span>
+                  <span className="text-[10px] aura-num muted">{fmtAura(inv.position_value)}</span>
+                </Link>
+              ))}
+            </div>
+          </NeoCard>
+        </>
+      )}
 
       {/* comments */}
-      <SectionTitle right={<span className="text-xs muted">{data.comments.length}</span>}>Comments</SectionTitle>
-      <CommentSection memeId={m.id} initial={data.comments} />
+      <SectionTitle right={<span className="text-xs muted">{data?.comments?.length ?? m.comment_count}</span>}>Comments</SectionTitle>
+      {data?.comments ? (
+        <CommentSection memeId={m.id} initial={data.comments} />
+      ) : (
+        <div className="py-8 text-center hd muted text-xs">LOADING COMMENTS…</div>
+      )}
 
       <InvestSheet meme={m} open={investOpen} onClose={() => setInvestOpen(false)} onDone={() => { refresh(); refreshSession(); }} />
       <SellSheet meme={m} open={sellOpen} onClose={() => setSellOpen(false)} onDone={() => { refresh(); refreshSession(); }} />

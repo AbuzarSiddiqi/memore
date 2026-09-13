@@ -7,6 +7,7 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { api, useApi, useSession, useToast } from "@/lib/client";
+import { getCachedMessages, appendCachedMessages, purgeExpiredChatLocal, getCachedChats } from "@/lib/client-cache";
 import type { ChatDetail, ChatMessageView, ChatReplyRef, MemeView } from "@/lib/types";
 import { REACTION_IDS } from "@/lib/reactions";
 import { Avatar, NeoButton, Sheet } from "@/components/ui";
@@ -242,21 +243,87 @@ export default function ChatPage() {
   const fileKind = useRef<"image" | "video">("image");
   const listRef = useRef<HTMLDivElement>(null);
   const alive = useRef(true);
+  const lastSyncCursorRef = useRef<string>("");
 
+  // 1. Instant Cache-First Hydration on mount (Frame 0 rendering)
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const cached = await getCachedMessages(id);
+      if (!active) return;
+      if (cached && cached.length > 0) {
+        lastSyncCursorRef.current = cached[cached.length - 1].created_at;
+        const allChats = await getCachedChats(user?.id);
+        const chatMeta = allChats?.find((c) => c.id === id);
+        setDetail((prev) => {
+          if (prev) return prev;
+          return {
+            conversation: {
+              id,
+              created_at: chatMeta?.last_at || new Date().toISOString(),
+              expires_at: chatMeta?.expires_at || new Date(Date.now() + 86400000).toISOString(),
+              remaining_ms: chatMeta?.remaining_ms || 86400000,
+            },
+            other: chatMeta?.other || { id: "", username: "", display_name: "", avatar_bg: "#222" },
+            messages: cached,
+          };
+        });
+      }
+    })();
+    return () => { active = false; };
+  }, [id, user?.id]);
+
+  // 2. Cursor-based incremental synchronization
   const load = useCallback(async () => {
     try {
-      const d = await api<ChatDetail>(`/api/chats/${id}`);
+      const cursor = lastSyncCursorRef.current;
+      const url = cursor ? `/api/chats/${id}?after=${encodeURIComponent(cursor)}` : `/api/chats/${id}`;
+      const d = await api<ChatDetail>(url);
       if (!alive.current) return;
       setGone(null);
-      setDetail(d);
+
+      if (d.is_delta) {
+        if (d.messages && d.messages.length > 0) {
+          const updated = await appendCachedMessages(id, d.messages, d.conversation.expires_at);
+          lastSyncCursorRef.current = updated[updated.length - 1].created_at;
+          setDetail((prev) => {
+            if (!prev) return d;
+            return {
+              ...prev,
+              conversation: { ...prev.conversation, ...d.conversation },
+              other: d.other,
+              messages: updated,
+            };
+          });
+        } else if (d.conversation.other_read_at) {
+          setDetail((prev) => {
+            if (!prev) return prev;
+            const otherRead = d.conversation.other_read_at!;
+            return {
+              ...prev,
+              conversation: { ...prev.conversation, ...d.conversation },
+              messages: prev.messages.map((m) =>
+                m.sender_id === user?.id && otherRead >= m.created_at ? { ...m, seen: true } : m
+              ),
+            };
+          });
+        }
+      } else {
+        const updated = await appendCachedMessages(id, d.messages, d.conversation.expires_at);
+        if (updated.length > 0) {
+          lastSyncCursorRef.current = updated[updated.length - 1].created_at;
+        }
+        setDetail({ ...d, messages: updated });
+      }
     } catch (e) {
       if (!alive.current) return;
       const msg = (e as Error).message || "";
       if (msg === "expired" || msg.includes("disappeared") || msg.includes("Too late")) {
         setGone("expired");
+        void purgeExpiredChatLocal(id);
       }
     }
-  }, [id]);
+  }, [id, user?.id]);
 
   useEffect(() => {
     alive.current = true;
@@ -267,6 +334,18 @@ export default function ChatPage() {
       clearInterval(t);
     };
   }, [load]);
+
+  // Listen for cross-tab expiration event
+  useEffect(() => {
+    const onExpired = (e: any) => {
+      if (e?.detail?.id === id) {
+        setGone("expired");
+        void purgeExpiredChatLocal(id);
+      }
+    };
+    window.addEventListener("memore:chat-expired", onExpired);
+    return () => window.removeEventListener("memore:chat-expired", onExpired);
+  }, [id]);
 
   const remaining = detail ? Math.max(0, new Date(detail.conversation.expires_at).getTime() - Date.now()) : 0;
   useEffect(() => {
@@ -506,14 +585,22 @@ export default function ChatPage() {
   const send = async (payload: { type: "text" | "image" | "video" | "post" | "sticker"; content?: string; media_url?: string; post_id?: string; sticker_id?: string; reply_to_message_id?: string }) => {
     setBusy(true);
     try {
-      await api(`/api/chats/${id}/messages`, {
+      const res = await api<{ message: ChatMessageView }>(`/api/chats/${id}/messages`, {
         json: { ...payload, reply_to_message_id: payload.reply_to_message_id ?? replyTo?.id },
       });
       setReplyTo(null);
+      if (res?.message) {
+        const updated = await appendCachedMessages(id, [res.message], detail?.conversation.expires_at);
+        lastSyncCursorRef.current = res.message.created_at;
+        setDetail((prev) => (prev ? { ...prev, messages: updated } : prev));
+      }
       await load();
     } catch (e) {
       toast((e as Error).message, "err");
-      if ((e as Error).message.includes("disappeared")) setGone("expired");
+      if ((e as Error).message.includes("disappeared")) {
+        setGone("expired");
+        void purgeExpiredChatLocal(id);
+      }
     } finally {
       setBusy(false);
     }

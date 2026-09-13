@@ -3,47 +3,81 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { PublicUser } from "./types";
 import { playSfx } from "./sfx";
+import { dedupRequest, getMemoryCache, setMemoryCache, purgeUserPrivateCache } from "./client-cache";
 
 // ---------- api ----------
 export const UNAUTHORIZED_EVENT = "aura:unauthorized";
 
 export async function api<T = any>(url: string, opts?: RequestInit & { json?: unknown }): Promise<T> {
-  const init: RequestInit = { ...opts };
-  if (opts?.json !== undefined) {
-    init.method = opts.method ?? "POST";
-    init.headers = { "Content-Type": "application/json", ...(opts.headers ?? {}) };
-    init.body = JSON.stringify(opts.json);
+  const isGet = !opts?.method || opts.method.toUpperCase() === "GET";
+
+  const execute = async () => {
+    const init: RequestInit = { ...opts };
+    if (opts?.json !== undefined) {
+      init.method = opts.method ?? "POST";
+      init.headers = { "Content-Type": "application/json", ...(opts.headers ?? {}) };
+      init.body = JSON.stringify(opts.json);
+    }
+    const res = await fetch(url, init);
+    const data = await res.json().catch(() => ({}));
+    // Server says our session is gone (e.g. reseed, expiry) — re-sync session
+    // state so the UI logs out instead of showing ghost "Log in first" errors.
+    if (res.status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+    }
+    if (!res.ok) throw new Error((data as { error?: string }).error ?? "Something went wrong.");
+    return data as T;
+  };
+
+  // Deduplicate identical concurrent GET requests
+  if (isGet) {
+    return dedupRequest<T>(url, execute);
   }
-  const res = await fetch(url, init);
-  const data = await res.json().catch(() => ({}));
-  // Server says our session is gone (e.g. reseed, expiry) — re-sync session
-  // state so the UI logs out instead of showing ghost "Log in first" errors.
-  if (res.status === 401 && typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
-  }
-  if (!res.ok) throw new Error((data as { error?: string }).error ?? "Something went wrong.");
-  return data as T;
+  return execute();
 }
 
 export function useApi<T>(url: string | null, deps: unknown[] = []) {
-  const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
+  const initialCache = url ? getMemoryCache<T>(url) : null;
+  const [data, setData] = useState<T | null>(initialCache);
+  const [loading, setLoading] = useState<boolean>(!initialCache);
   const [error, setError] = useState<string | null>(null);
   // state, not a ref: bumping a ref never re-renders, so refresh() was a no-op
   const [tick, setTick] = useState(0);
-  const hasData = useRef(false);
+  const hasData = useRef(!!initialCache);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
   useEffect(() => {
     if (!url) return;
     let alive = true;
-    // Only show the skeleton on first load; background refreshes keep the old
-    // data on screen so the page never flashes (stale-while-revalidate).
-    if (!hasData.current) setLoading(true);
+    // Check if memory has a fresh copy
+    const cached = getMemoryCache<T>(url);
+    if (cached) {
+      setData(cached);
+      hasData.current = true;
+      setLoading(false);
+    } else if (!hasData.current) {
+      setLoading(true);
+    }
+
     api<T>(url)
-      .then((d) => { if (alive) { hasData.current = true; setData(d); setError(null); } })
-      .catch((e) => { if (alive) setError(e.message); })
-      .finally(() => { if (alive) setLoading(false); });
+      .then((d) => {
+        if (alive) {
+          hasData.current = true;
+          setData(d);
+          setError(null);
+          setMemoryCache(url, d);
+        }
+      })
+      .catch((e) => {
+        if (alive) {
+          // If we already have cached data, don't destroy it on network error
+          if (!hasData.current) setError(e.message);
+        }
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, tick, ...deps]);
@@ -90,13 +124,16 @@ export function useSession() {
   return useContext(SessionContext);
 }
 
-export async function clientLogout() {
+export async function clientLogout(userId?: string) {
   try {
     const { createClient } = await import("@/lib/supabase/client");
     const supabase = createClient();
     if (supabase) {
       await supabase.auth.signOut().catch(() => {});
     }
+  } catch {}
+  try {
+    await purgeUserPrivateCache(userId || "me");
   } catch {}
   if (typeof window !== "undefined") {
     try {
@@ -117,6 +154,23 @@ export async function clientLogout() {
   if (typeof window !== "undefined") {
     window.location.href = "/login";
   }
+}
+
+// ---------- offline status ----------
+export function useOfflineStatus(): boolean {
+  const [offline, setOffline] = useState(() => (typeof navigator !== "undefined" ? !navigator.onLine : false));
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onOff = () => setOffline(true);
+    const onOn = () => setOffline(false);
+    window.addEventListener("offline", onOff);
+    window.addEventListener("online", onOn);
+    return () => {
+      window.removeEventListener("offline", onOff);
+      window.removeEventListener("online", onOn);
+    };
+  }, []);
+  return offline;
 }
 
 // ---------- toasts ----------

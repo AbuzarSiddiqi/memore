@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, useApi, useSession } from "@/lib/client";
+import { getCachedChats, setCachedChats, sweepExpiredChats } from "@/lib/client-cache";
 import type { ChatListItem } from "@/lib/types";
 import { Avatar, EmptyState, NeoButton, Skeleton } from "@/components/ui";
 import { ChatClock, ContactsSheet } from "@/components/chat";
@@ -17,10 +18,44 @@ function previewIcon(type: ChatListItem["preview_type"]): string {
 
 export default function MessagesPage() {
   const { user } = useSession();
+  const [cachedChats, setCachedState] = useState<ChatListItem[] | null>(null);
   const { data, loading, refresh } = useApi<{ chats: ChatListItem[] }>("/api/chats");
   const router = useRouter();
   const [picker, setPicker] = useState(false);
   const [, force] = useState(0);
+
+  // Instant hydration from persistent cache on mount
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      void sweepExpiredChats();
+      const cached = await getCachedChats(user?.id);
+      if (active && cached && cached.length > 0) {
+        setCachedState(cached);
+      }
+    })();
+    return () => { active = false; };
+  }, [user?.id]);
+
+  // Sync fresh server response to persistent cache
+  useEffect(() => {
+    if (data?.chats && user?.id) {
+      setCachedChats(user.id, data.chats);
+      setCachedState(data.chats);
+    }
+  }, [data?.chats, user?.id]);
+
+  // Listen for cross-tab chat expiration
+  useEffect(() => {
+    const onExpired = (e: any) => {
+      const deadId = e?.detail?.id;
+      if (deadId) {
+        setCachedState((prev) => (prev ? prev.filter((c) => c.id !== deadId) : null));
+      }
+    };
+    window.addEventListener("memore:chat-expired", onExpired);
+    return () => window.removeEventListener("memore:chat-expired", onExpired);
+  }, []);
 
   // gentle polling: inbox refreshes every 8s while open
   useEffect(() => {
@@ -34,7 +69,9 @@ export default function MessagesPage() {
     return () => clearInterval(t);
   }, []);
 
-  const chats = data?.chats ?? [];
+  const chats = data?.chats ?? cachedChats ?? [];
+  const isInitialLoading = loading && chats.length === 0;
+
   const startChat = async (username: string) => {
     const r = await api<{ id: string }>("/api/chats", { json: { username } });
     setPicker(false);
