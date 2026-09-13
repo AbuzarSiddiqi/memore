@@ -71,6 +71,7 @@ export async function POST(req: NextRequest) {
     const token = createSession(user.id);
     const res = NextResponse.json({ user: publicUser(user, user.id) });
     res.cookies.set(SESSION_COOKIE, token, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 30 * 86_400 });
+    res.cookies.set("logged_out", "", { path: "/", maxAge: 0 });
     return res;
   } catch (e) {
     return fail(humanError(e), 500);

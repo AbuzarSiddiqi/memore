@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { api, fmtAura, useSession, useApi } from "@/lib/client";
+import { api, fmtAura, useSession, useApi, clientLogout } from "@/lib/client";
 import { MemoreLogo, MemoreMark, MemoreWordmark, Spark } from "@/components/brand";
 import { Icon, type IconName } from "@/components/icons";
 import { ChangePct, NeoCard } from "./ui";
@@ -168,9 +168,7 @@ export function SideNav() {
   const { user, refresh } = useSession();
 
   const logout = async () => {
-    await api("/api/auth/logout", { method: "POST" });
-    await refresh();
-    router.push("/");
+    await clientLogout();
   };
 
   const items = [

@@ -3,7 +3,7 @@
 import fs from "fs";
 import path from "path";
 import { seedWorld, emptyWorld } from "./seed";
-import { persistSnapshotToSupabase, hydrateFromSupabase, CREATOR_UUID_MAP } from "./sync";
+import { persistSnapshotToSupabase, hydrateFromSupabase, CREATOR_UUID_MAP, toCanonicalUuid } from "./sync";
 import type { DB } from "../types";
 
 const DATA_DIR = path.join(process.cwd(), ".data");
@@ -26,11 +26,12 @@ export function dataDirReady() {
 }
 
 /** Normalize all legacy usernames/prefixes to canonical Supabase UUIDs */
-function normalizeDbUuids(d: DB) {
+export function normalizeDbUuids(d: DB) {
   for (const u of d.users) {
-    if (CREATOR_UUID_MAP[u.id]) {
+    const canon = toCanonicalUuid(u.id);
+    if (canon !== u.id) {
       const oldId = u.id;
-      u.id = CREATOR_UUID_MAP[oldId];
+      u.id = canon;
       // update all references in state
       for (const m of d.memes) if (m.creator_id === oldId) m.creator_id = u.id;
       for (const h of d.holdings) if (h.user_id === oldId) h.user_id = u.id;
@@ -39,6 +40,31 @@ function normalizeDbUuids(d: DB) {
       for (const s of d.sessions) if (s.user_id === oldId) s.user_id = u.id;
       for (const cl of d.calls) if (cl.user_id === oldId) cl.user_id = u.id;
       for (const n of d.notifications) if (n.user_id === oldId) n.user_id = u.id;
+    }
+  }
+  if (d.chats) {
+    for (const c of d.chats) {
+      c.participants = [toCanonicalUuid(c.participants[0]), toCanonicalUuid(c.participants[1])] as [string, string];
+      if (c.reads) {
+        const nr: Record<string, string> = {};
+        for (const [k, v] of Object.entries(c.reads)) nr[toCanonicalUuid(k)] = v;
+        c.reads = nr;
+      }
+      if (c.muted) {
+        const nm: Record<string, boolean> = {};
+        for (const [k, v] of Object.entries(c.muted)) nm[toCanonicalUuid(k)] = v;
+        c.muted = nm;
+      }
+    }
+  }
+  if (d.chat_messages) {
+    for (const m of d.chat_messages) {
+      m.sender_id = toCanonicalUuid(m.sender_id);
+    }
+  }
+  if (d.message_reactions) {
+    for (const r of d.message_reactions) {
+      r.user_id = toCanonicalUuid(r.user_id);
     }
   }
 }

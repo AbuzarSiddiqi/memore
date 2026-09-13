@@ -61,6 +61,11 @@ export function destroySession(token: string) {
 
 export async function currentUser(): Promise<Profile | null> {
   const store = await cookies();
+  const isLoggedOut = store.get("logged_out")?.value === "1";
+  if (isLoggedOut) {
+    return null;
+  }
+
   const token = store.get(SESSION_COOKIE)?.value;
   if (token) {
     const userId = verifySessionToken(token);

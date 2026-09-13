@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const username = String(body.username ?? "").trim();
   if (!username) return fail("Pick someone to chat with.");
-  const result = getOrCreateConversation(user, username);
+  const result = await getOrCreateConversation(user, username);
   if ("error" in result) return fail(result.error);
   return ok({ id: result.conversation.id, expires_at: result.conversation.expires_at, other: result.other.username });
 }

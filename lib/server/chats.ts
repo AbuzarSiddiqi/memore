@@ -3,9 +3,10 @@
 // creation, every request re-checks it, and expired conversations are wiped
 // (messages + reactions + media) by an idempotent cleanup pass that runs on
 // every chat API call. Expired conversations can never be queried again.
-import { db, save, uid, uploadsDir } from "./db";
+import { db, save, uid, uploadsDir, normalizeDbUuids } from "./db";
 import { userBySlug } from "./auth";
 import { memeView } from "./views";
+import { toCanonicalUuid } from "./sync";
 import { REACTION_IDS } from "../reactions";
 import { STICKER_IDS } from "../stickers";
 import type {
@@ -23,13 +24,37 @@ export async function hydrateChats(): Promise<void> {
   if (chatHydrationPromise) return chatHydrationPromise;
   chatHydrationPromise = (async () => {
     try {
-      const { createAdminClient } = await import("@/lib/supabase/admin");
-      const admin = createAdminClient();
-      if (!admin) return;
-      const { data, error } = await admin.storage.from("system").download(CHATS_FILE);
-      if (!error && data) {
-        const text = await data.text();
-        const parsed = JSON.parse(text);
+      let parsed: any = null;
+      try {
+        const { createAdminClient } = await import("@/lib/supabase/admin");
+        const admin = createAdminClient();
+        if (admin) {
+          const { data, error } = await admin.storage.from("system").download(CHATS_FILE);
+          if (!error && data) {
+            const text = await data.text();
+            parsed = JSON.parse(text);
+          }
+        }
+      } catch {}
+
+      if (!parsed) {
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || "https://mnfasawmfajfwquhymyl.supabase.co";
+        const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+        const url = `${supabaseUrl}/storage/v1/object/system/${CHATS_FILE}?t=${Date.now()}`;
+        const res = await fetch(url, {
+          headers: {
+            ...(serviceKey ? { Authorization: `Bearer ${serviceKey}` } : {}),
+            "Cache-Control": "no-cache",
+            Pragma: "no-cache",
+          },
+          cache: "no-store",
+        });
+        if (res.ok) {
+          parsed = await res.json();
+        }
+      }
+
+      if (parsed) {
         const d = db();
         ensureChats(d);
         if (Array.isArray(parsed.chats)) {
@@ -53,6 +78,7 @@ export async function hydrateChats(): Promise<void> {
             else d.message_reactions.push(r);
           }
         }
+        normalizeDbUuids(d);
       }
     } catch (err) {
       console.warn("hydrateChats warning:", err);
@@ -64,28 +90,44 @@ export async function hydrateChats(): Promise<void> {
 }
 
 let persistChatTimer: ReturnType<typeof setTimeout> | null = null;
-export function persistChats(): void {
-  if (persistChatTimer) clearTimeout(persistChatTimer);
-  persistChatTimer = setTimeout(async () => {
+export async function persistChats(immediate = false): Promise<void> {
+  const doUpload = async () => {
     try {
       const { createAdminClient } = await import("@/lib/supabase/admin");
       const admin = createAdminClient();
       if (!admin) return;
       const d = db();
       ensureChats(d);
+      normalizeDbUuids(d);
       const payload = Buffer.from(JSON.stringify({
         chats: d.chats,
         chat_messages: d.chat_messages,
         message_reactions: d.message_reactions,
+        updated_at: Date.now(),
       }));
       await admin.storage.from("system").upload(CHATS_FILE, payload, {
         contentType: "application/json",
+        cacheControl: "0",
         upsert: true,
       });
     } catch (err) {
       console.warn("persistChats warning:", err);
     }
-  }, 100);
+  };
+
+  if (immediate) {
+    if (persistChatTimer) {
+      clearTimeout(persistChatTimer);
+      persistChatTimer = null;
+    }
+    await doUpload();
+  } else {
+    if (persistChatTimer) clearTimeout(persistChatTimer);
+    persistChatTimer = setTimeout(() => {
+      persistChatTimer = null;
+      void doUpload();
+    }, 50);
+  }
 }
 
 // Old db.json files predate the chat collections — backfill them lazily.
@@ -154,24 +196,31 @@ function activeChats(d: ReturnType<typeof db>): ChatConversation[] {
 }
 
 function otherId(c: ChatConversation, userId: string): string {
-  return c.participants[0] === userId ? c.participants[1] : c.participants[0];
+  const canonUser = toCanonicalUuid(userId);
+  const p0 = toCanonicalUuid(c.participants[0]);
+  const p1 = toCanonicalUuid(c.participants[1]);
+  return p0 === canonUser ? p1 : p0;
 }
 
 function isBlocked(user: Profile, otherId: string): boolean {
-  return (user.blocked ?? []).includes(otherId);
+  const blocked = (user.blocked ?? []).map((b) => toCanonicalUuid(b));
+  return blocked.includes(toCanonicalUuid(otherId));
 }
 
 export function chatUnreadTotal(user: Profile): number {
   const d = db();
   ensureChats(d);
   let total = 0;
+  const canonUserId = toCanonicalUuid(user.id);
   for (const c of activeChats(d)) {
-    if (!c.participants.includes(user.id)) continue;
-    if (c.muted?.[user.id]) continue;
+    const p0 = toCanonicalUuid(c.participants[0]);
+    const p1 = toCanonicalUuid(c.participants[1]);
+    if (p0 !== canonUserId && p1 !== canonUserId) continue;
+    if (c.muted?.[user.id] || c.muted?.[canonUserId]) continue;
     const last = d.chat_messages.filter((m) => m.conversation_id === c.id);
     const other = otherId(c, user.id);
-    const lastRead = c.reads?.[user.id] ?? "";
-    total += last.filter((m) => m.sender_id === other && m.created_at > lastRead).length;
+    const lastRead = c.reads?.[user.id] ?? c.reads?.[canonUserId] ?? "";
+    total += last.filter((m) => toCanonicalUuid(m.sender_id) === other && m.created_at > lastRead).length;
   }
   return total;
 }
@@ -179,24 +228,27 @@ export function chatUnreadTotal(user: Profile): number {
 export function listChats(user: Profile): ChatListItem[] {
   const d = db();
   ensureChats(d);
-  const blocked = new Set(user.blocked ?? []);
+  const canonUserId = toCanonicalUuid(user.id);
+  const blocked = new Set((user.blocked ?? []).map((b) => toCanonicalUuid(b)));
   const items: ChatListItem[] = [];
   for (const c of activeChats(d)) {
-    if (!c.participants.includes(user.id)) continue;
-    const oid = otherId(c, user.id);
+    const p0 = toCanonicalUuid(c.participants[0]);
+    const p1 = toCanonicalUuid(c.participants[1]);
+    if (p0 !== canonUserId && p1 !== canonUserId) continue;
+    const oid = p0 === canonUserId ? p1 : p0;
     if (blocked.has(oid)) continue; // blocked conversations vanish from the list
-    const otherProfile = d.users.find((u) => u.id === oid);
+    const otherProfile = d.users.find((u) => toCanonicalUuid(u.id) === oid);
     if (!otherProfile) continue;
     const msgs = d.chat_messages
       .filter((m) => m.conversation_id === c.id)
       .sort((a, b) => a.created_at.localeCompare(b.created_at));
     const last = msgs[msgs.length - 1];
-    const lastRead = c.reads?.[user.id] ?? "";
-    const unread = msgs.filter((m) => m.sender_id === oid && m.created_at > lastRead).length;
-    const previewUser = last ? d.users.find((u) => u.id === last.sender_id) : null;
+    const lastRead = c.reads?.[user.id] ?? c.reads?.[canonUserId] ?? "";
+    const unread = msgs.filter((m) => toCanonicalUuid(m.sender_id) === oid && m.created_at > lastRead).length;
+    const previewUser = last ? d.users.find((u) => toCanonicalUuid(u.id) === toCanonicalUuid(last.sender_id)) : null;
     const previewText =
       last == null ? "Say something. It'll be gone tomorrow."
-      : last.type === "post" ? (last.content || "Sent a MEMORE post") + (previewUser && previewUser.id === user.id ? "" : "")
+      : last.type === "post" ? (last.content || "Sent a MEMORE post") + (previewUser && toCanonicalUuid(previewUser.id) === canonUserId ? "" : "")
       : last.type === "image" ? "photo"
       : last.type === "video" ? "video"
       : last.content;
@@ -209,52 +261,60 @@ export function listChats(user: Profile): ChatListItem[] {
       unread,
       remaining_ms: Math.max(0, new Date(c.expires_at).getTime() - Date.now()),
       expires_at: c.expires_at,
-      muted: !!c.muted?.[user.id],
+      muted: !!(c.muted?.[user.id] || c.muted?.[canonUserId]),
     });
   }
   return items.sort((a, b) => b.last_at.localeCompare(a.last_at));
 }
 
-export function getOrCreateConversation(user: Profile, otherUsername: string): { conversation: ChatConversation; other: Profile } | { error: string } {
+export async function getOrCreateConversation(user: Profile, otherUsername: string): Promise<{ conversation: ChatConversation; other: Profile } | { error: string }> {
   const d = db();
   ensureChats(d);
   const other = userBySlug(otherUsername);
   if (!other) return { error: "That user doesn't exist." };
-  if (other.id === user.id) return { error: "You can't chat with yourself. Try a diary." };
-  if (isBlocked(user, other.id)) return { error: "You blocked this user." };
-  if (isBlocked(other, user.id) || other.suspended) return { error: "Chat isn't available with this user." };
+  const canonUser = toCanonicalUuid(user.id);
+  const canonOther = toCanonicalUuid(other.id);
+  if (canonOther === canonUser) return { error: "You can't chat with yourself. Try a diary." };
+  if (isBlocked(user, canonOther)) return { error: "You blocked this user." };
+  if (isBlocked(other, canonUser) || other.suspended) return { error: "Chat isn't available with this user." };
 
-  const existing = activeChats(d).find(
-    (c) => c.participants.includes(user.id) && c.participants.includes(other.id)
-  );
+  const existing = activeChats(d).find((c) => {
+    const p0 = toCanonicalUuid(c.participants[0]);
+    const p1 = toCanonicalUuid(c.participants[1]);
+    return (p0 === canonUser && p1 === canonOther) || (p0 === canonOther && p1 === canonUser);
+  });
   if (existing) return { conversation: existing, other };
 
   const now = new Date();
   const conversation: ChatConversation = {
     id: `c_${uid()}`,
-    participants: [user.id, other.id].sort() as [string, string],
+    participants: [canonUser, canonOther].sort() as [string, string],
     created_at: now.toISOString(),
     expires_at: new Date(now.getTime() + CHAT_TTL_MS).toISOString(),
     status: "active",
-    reads: { [user.id]: now.toISOString() },
+    reads: { [canonUser]: now.toISOString() },
     muted: {},
   };
   d.chats.push(conversation);
   save();
-  persistChats();
+  await persistChats(true);
   return { conversation, other };
 }
 
 export function getChatDetail(user: Profile, conversationId: string): ChatDetail | { error: string; status?: number } {
   const d = db();
   ensureChats(d);
+  const canonUserId = toCanonicalUuid(user.id);
   const c = d.chats.find((x) => x.id === conversationId);
-  if (!c || !c.participants.includes(user.id)) return { error: "Chat not found.", status: 404 };
+  if (!c) return { error: "Chat not found.", status: 404 };
+  const p0 = toCanonicalUuid(c.participants[0]);
+  const p1 = toCanonicalUuid(c.participants[1]);
+  if (p0 !== canonUserId && p1 !== canonUserId) return { error: "Chat not found.", status: 404 };
   const remaining = new Date(c.expires_at).getTime() - Date.now();
   if (c.status !== "active" || remaining <= 0) return { error: "expired", status: 410 };
 
-  const oid = otherId(c, user.id);
-  const otherProfile = d.users.find((u) => u.id === oid);
+  const oid = p0 === canonUserId ? p1 : p0;
+  const otherProfile = d.users.find((u) => toCanonicalUuid(u.id) === oid);
   if (!otherProfile) return { error: "Chat not found.", status: 404 };
 
   const otherRead = c.reads?.[oid] ?? "";
@@ -269,7 +329,7 @@ export function getChatDetail(user: Profile, conversationId: string): ChatDetail
     const post = t.type === "post" && t.post_id ? d.memes.find((x) => x.id === t.post_id) : null;
     return {
       id: t.id,
-      sender_id: t.sender_id,
+      sender_id: toCanonicalUuid(t.sender_id),
       type: t.type,
       content: t.content,
       sticker_id: t.sticker_id ?? null,
@@ -278,8 +338,9 @@ export function getChatDetail(user: Profile, conversationId: string): ChatDetail
   };
   const messages: ChatMessageView[] = convMessages.map((m) => ({
     ...m,
+    sender_id: toCanonicalUuid(m.sender_id),
     post: m.type === "post" && m.post_id ? postPreview(m.post_id, user.id) : null,
-    seen: m.sender_id === user.id && otherRead >= m.created_at,
+    seen: toCanonicalUuid(m.sender_id) === canonUserId && otherRead >= m.created_at,
     reactions: summarizeReactions(d.message_reactions, m.id, user.id),
     reply_to: replyRef(m),
   }));
@@ -299,16 +360,19 @@ function postPreview(postId: string, viewerId: string): MemeView | null {
 
 export type SendInput = { type: ChatMessage["type"]; content?: string; post_id?: string; media_url?: string; sticker_id?: string; reply_to_message_id?: string };
 
-export function sendMessage(user: Profile, conversationId: string, input: SendInput): ChatMessageView | { error: string; status?: number } {
+export async function sendMessage(user: Profile, conversationId: string, input: SendInput): Promise<ChatMessageView | { error: string; status?: number }> {
   const d = db();
   ensureChats(d);
+  const canonUserId = toCanonicalUuid(user.id);
   const c = d.chats.find((x) => x.id === conversationId);
-  if (!c || !c.participants.includes(user.id)) return { error: "Chat not found.", status: 404 };
+  if (!c) return { error: "Chat not found.", status: 404 };
+  const p0 = toCanonicalUuid(c.participants[0]);
+  const p1 = toCanonicalUuid(c.participants[1]);
+  if (p0 !== canonUserId && p1 !== canonUserId) return { error: "Chat not found.", status: 404 };
   // server-authoritative expiration — a tampered client clock changes nothing
   if (c.status !== "active" || new Date(c.expires_at).getTime() <= Date.now()) {
     return { error: "Too late. This chat disappeared.", status: 410 };
   }
-  const oid = otherId(c, user.id);
 
   // a reply references another message in this same conversation — never a copy
   let replyTo: string | null = null;
@@ -323,7 +387,7 @@ export function sendMessage(user: Profile, conversationId: string, input: SendIn
     const sticker = input.sticker_id && STICKER_IDS.includes(input.sticker_id) ? input.sticker_id : null;
     if (!sticker) return { error: "Unknown sticker." };
     message = {
-      id: uid(), conversation_id: c.id, sender_id: user.id, type: "sticker",
+      id: uid(), conversation_id: c.id, sender_id: canonUserId, type: "sticker",
       content: "", post_id: null, media_url: null, sticker_id: sticker, reply_to_message_id: replyTo,
       created_at: new Date().toISOString(),
     };
@@ -331,7 +395,7 @@ export function sendMessage(user: Profile, conversationId: string, input: SendIn
     const post = d.memes.find((m) => m.id === input.post_id && m.status === "live");
     if (!post) return { error: "That meme is gone." };
     message = {
-      id: uid(), conversation_id: c.id, sender_id: user.id, type: "post",
+      id: uid(), conversation_id: c.id, sender_id: canonUserId, type: "post",
       content: (input.content ?? "").slice(0, 280), post_id: post.id, media_url: null,
       sticker_id: null, reply_to_message_id: replyTo,
       created_at: new Date().toISOString(),
@@ -339,7 +403,7 @@ export function sendMessage(user: Profile, conversationId: string, input: SendIn
   } else if (input.type === "image" || input.type === "video") {
     if (!input.media_url) return { error: "Missing media." };
     message = {
-      id: uid(), conversation_id: c.id, sender_id: user.id, type: input.type,
+      id: uid(), conversation_id: c.id, sender_id: canonUserId, type: input.type,
       content: (input.content ?? "").slice(0, 280), post_id: null, media_url: input.media_url,
       sticker_id: null, reply_to_message_id: replyTo,
       created_at: new Date().toISOString(),
@@ -348,7 +412,7 @@ export function sendMessage(user: Profile, conversationId: string, input: SendIn
     const content = (input.content ?? "").trim().slice(0, 280);
     if (!content) return { error: "Say something (anything)." };
     message = {
-      id: uid(), conversation_id: c.id, sender_id: user.id, type: "text",
+      id: uid(), conversation_id: c.id, sender_id: canonUserId, type: "text",
       content, post_id: null, media_url: null,
       sticker_id: null, reply_to_message_id: replyTo,
       created_at: new Date().toISOString(),
@@ -356,9 +420,9 @@ export function sendMessage(user: Profile, conversationId: string, input: SendIn
   }
 
   d.chat_messages.push(message);
-  c.reads = { ...c.reads, [user.id]: message.created_at }; // sender has read up to now
+  c.reads = { ...c.reads, [user.id]: message.created_at, [canonUserId]: message.created_at };
   save();
-  persistChats();
+  await persistChats(true);
   return {
     ...message,
     post: message.type === "post" && message.post_id ? postPreview(message.post_id, user.id) : null,
@@ -370,83 +434,102 @@ export function sendMessage(user: Profile, conversationId: string, input: SendIn
 
 /** One reaction per user per message: picking the same one again removes it,
  * picking a different one swaps it. Returns the fresh per-message summary. */
-export function reactToMessage(user: Profile, conversationId: string, messageId: string, reactionId: string):
-  { reactions: MessageReactionSummary[] } | { error: string; status?: number } {
+export async function reactToMessage(user: Profile, conversationId: string, messageId: string, reactionId: string):
+  Promise<{ reactions: MessageReactionSummary[] } | { error: string; status?: number }> {
   const d = db();
   ensureChats(d);
+  const canonUserId = toCanonicalUuid(user.id);
   if (!REACTION_IDS.includes(reactionId)) return { error: "Unknown reaction." };
   const c = d.chats.find((x) => x.id === conversationId);
-  if (!c || !c.participants.includes(user.id)) return { error: "Chat not found.", status: 404 };
+  if (!c) return { error: "Chat not found.", status: 404 };
+  const p0 = toCanonicalUuid(c.participants[0]);
+  const p1 = toCanonicalUuid(c.participants[1]);
+  if (p0 !== canonUserId && p1 !== canonUserId) return { error: "Chat not found.", status: 404 };
   if (c.status !== "active" || new Date(c.expires_at).getTime() <= Date.now()) {
     return { error: "Too late. This chat disappeared.", status: 410 };
   }
   const m = d.chat_messages.find((x) => x.id === messageId && x.conversation_id === c.id);
   if (!m) return { error: "Message not found.", status: 404 };
 
-  const existing = d.message_reactions.find((r) => r.message_id === messageId && r.user_id === user.id);
+  const existing = d.message_reactions.find((r) => r.message_id === messageId && toCanonicalUuid(r.user_id) === canonUserId);
   if (existing && existing.reaction_id === reactionId) {
     d.message_reactions = d.message_reactions.filter((r) => r.id !== existing.id);
   } else if (existing) {
     existing.reaction_id = reactionId;
     existing.created_at = new Date().toISOString();
   } else {
-    d.message_reactions.push({ id: uid(), message_id: messageId, user_id: user.id, reaction_id: reactionId, created_at: new Date().toISOString() });
+    d.message_reactions.push({ id: uid(), message_id: messageId, user_id: canonUserId, reaction_id: reactionId, created_at: new Date().toISOString() });
   }
   save();
-  persistChats();
+  await persistChats(true);
   return { reactions: summarizeReactions(d.message_reactions, messageId, user.id) };
 }
 
 /** Unsend: permanently deletes YOUR message and its reactions — gone for
  * everyone, no archive (the disappearing-chat rule, applied early). */
-export function unsendMessage(user: Profile, conversationId: string, messageId: string): { ok: true } | { error: string; status?: number } {
+export async function unsendMessage(user: Profile, conversationId: string, messageId: string): Promise<{ ok: true } | { error: string; status?: number }> {
   const d = db();
   ensureChats(d);
+  const canonUserId = toCanonicalUuid(user.id);
   const c = d.chats.find((x) => x.id === conversationId);
-  if (!c || !c.participants.includes(user.id)) return { error: "Chat not found.", status: 404 };
+  if (!c) return { error: "Chat not found.", status: 404 };
+  const p0 = toCanonicalUuid(c.participants[0]);
+  const p1 = toCanonicalUuid(c.participants[1]);
+  if (p0 !== canonUserId && p1 !== canonUserId) return { error: "Chat not found.", status: 404 };
   if (c.status !== "active" || new Date(c.expires_at).getTime() <= Date.now()) {
     return { error: "Too late. This chat disappeared.", status: 410 };
   }
   const m = d.chat_messages.find((x) => x.id === messageId && x.conversation_id === c.id);
   if (!m) return { error: "Already gone." };
-  if (m.sender_id !== user.id) return { error: "You can only unsend your own messages.", status: 403 };
+  if (toCanonicalUuid(m.sender_id) !== canonUserId) return { error: "You can only unsend your own messages.", status: 403 };
   d.chat_messages = d.chat_messages.filter((x) => x.id !== messageId);
   d.message_reactions = d.message_reactions.filter((r) => r.message_id !== messageId);
   save();
-  persistChats();
+  await persistChats(true);
   return { ok: true };
 }
 
-export function markRead(user: Profile, conversationId: string): boolean {
+export async function markRead(user: Profile, conversationId: string): Promise<boolean> {
   const d = db();
   ensureChats(d);
+  const canonUserId = toCanonicalUuid(user.id);
   const c = d.chats.find((x) => x.id === conversationId);
-  if (!c || !c.participants.includes(user.id) || c.status !== "active") return false;
-  c.reads = { ...c.reads, [user.id]: new Date().toISOString() };
+  if (!c || c.status !== "active") return false;
+  const p0 = toCanonicalUuid(c.participants[0]);
+  const p1 = toCanonicalUuid(c.participants[1]);
+  if (p0 !== canonUserId && p1 !== canonUserId) return false;
+  const nowStr = new Date().toISOString();
+  c.reads = { ...c.reads, [user.id]: nowStr, [canonUserId]: nowStr };
   save();
-  persistChats();
+  await persistChats(false);
   return true;
 }
 
-export function toggleMute(user: Profile, conversationId: string): boolean {
+export async function toggleMute(user: Profile, conversationId: string): Promise<boolean> {
   const d = db();
   ensureChats(d);
+  const canonUserId = toCanonicalUuid(user.id);
   const c = d.chats.find((x) => x.id === conversationId);
-  if (!c || !c.participants.includes(user.id)) return false;
-  c.muted = { ...c.muted, [user.id]: !c.muted?.[user.id] };
+  if (!c) return false;
+  const p0 = toCanonicalUuid(c.participants[0]);
+  const p1 = toCanonicalUuid(c.participants[1]);
+  if (p0 !== canonUserId && p1 !== canonUserId) return false;
+  const nextVal = !c.muted?.[user.id] && !c.muted?.[canonUserId];
+  c.muted = { ...c.muted, [user.id]: nextVal, [canonUserId]: nextVal };
   save();
-  persistChats();
-  return !!c.muted[user.id];
+  await persistChats(false);
+  return nextVal;
 }
 
 export function listContacts(user: Profile): ChatOtherUser[] {
   const d = db();
-  const blocked = new Set(user.blocked ?? []);
+  const canonUserId = toCanonicalUuid(user.id);
+  const blocked = new Set((user.blocked ?? []).map((b) => toCanonicalUuid(b)));
   return d.users
-    .filter((u) => u.id !== user.id && !u.suspended && !blocked.has(u.id))
+    .filter((u) => toCanonicalUuid(u.id) !== canonUserId && !u.suspended && !blocked.has(toCanonicalUuid(u.id)))
     .sort((a, b) => b.aura_balance - a.aura_balance)
     .slice(0, 30)
-    .map((u) => ({ id: u.id, username: u.username, display_name: u.display_name, avatar_bg: u.avatar_bg }));
+    .map((u) => ({ id: toCanonicalUuid(u.id), username: u.username, display_name: u.display_name, avatar_bg: u.avatar_bg }));
 }
 
 export function toggleBlock(user: Profile, targetUsername: string): { blocked: boolean } | { error: string } {

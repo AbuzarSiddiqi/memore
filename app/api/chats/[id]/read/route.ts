@@ -6,6 +6,6 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
   const user = await requireUser();
   if (!user) return fail("Log in first.", 401);
   const { id } = await ctx.params;
-  markRead(user, id);
+  await markRead(user, id);
   return ok({ read: true });
 }

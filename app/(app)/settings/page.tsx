@@ -2,7 +2,7 @@
 // Settings — profile, appearance, privacy, session.
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, useSession, useToast } from "@/lib/client";
+import { api, useSession, useToast, clientLogout } from "@/lib/client";
 import { NeoButton, NeoCard, SectionTitle } from "@/components/ui";
 
 const COLORS = ["#7C4DFF", "#315BEF", "#FF6B57", "#22A565", "#F59E0B", "#E5484D", "#0EA5E9", "#9333EA"];
@@ -38,9 +38,7 @@ export default function SettingsPage() {
   };
 
   const logout = async () => {
-    await api("/api/auth/logout", { method: "POST" });
-    setUser(null);
-    router.push("/");
+    await clientLogout();
   };
 
   if (!user) return null;

@@ -10,7 +10,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const { id, messageId } = await ctx.params;
   const body = await req.json().catch(() => ({}));
   const reactionId = typeof body.reaction_id === "string" ? body.reaction_id : "";
-  const result = reactToMessage(user, id, messageId, reactionId);
+  const result = await reactToMessage(user, id, messageId, reactionId);
   if ("error" in result) return fail(result.error, result.status ?? 400);
   return ok(result);
 }

@@ -90,6 +90,35 @@ export function useSession() {
   return useContext(SessionContext);
 }
 
+export async function clientLogout() {
+  try {
+    const { createClient } = await import("@/lib/supabase/client");
+    const supabase = createClient();
+    if (supabase) {
+      await supabase.auth.signOut().catch(() => {});
+    }
+  } catch {}
+  if (typeof window !== "undefined") {
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith("sb-") || key.includes("supabase") || key.includes("auth"))) {
+          localStorage.removeItem(key);
+        }
+      }
+    } catch {}
+    try {
+      sessionStorage.clear();
+    } catch {}
+  }
+  try {
+    await api("/api/auth/logout", { method: "POST" });
+  } catch {}
+  if (typeof window !== "undefined") {
+    window.location.href = "/login";
+  }
+}
+
 // ---------- toasts ----------
 type Toast = { id: number; msg: string; kind: "ok" | "err" | "info" };
 const ToastContext = createContext<{ push: (msg: string, kind?: Toast["kind"]) => void }>({ push: () => {} });

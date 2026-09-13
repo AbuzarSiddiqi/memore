@@ -13,6 +13,6 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   const result = getChatDetail(user, id);
   if ("error" in result) return fail(result.error, result.status ?? 400);
   // opening the chat marks it read
-  markRead(user, id);
+  await markRead(user, id);
   return ok(result);
 }

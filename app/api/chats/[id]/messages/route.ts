@@ -21,8 +21,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     sticker_id: typeof body.sticker_id === "string" ? body.sticker_id : undefined,
     reply_to_message_id: typeof body.reply_to_message_id === "string" ? body.reply_to_message_id : undefined,
   };
-  const result = sendMessage(user, id, input);
+  const result = await sendMessage(user, id, input);
   if ("error" in result) return fail(result.error, result.status ?? 400);
-  markRead(user, id);
+  await markRead(user, id);
   return ok({ message: result });
 }

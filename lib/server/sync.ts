@@ -4,20 +4,34 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import type { DB, Holding, Meme, Profile, Transaction, Comment } from "../types";
 
 export const CREATOR_UUID_MAP: Record<string, string> = {
-  u_dank_vault: "dc588c3f-ec55-4ef0-ab0c-6ce8fa748be7",
-  u_tech_roasts: "b364e151-c849-4c05-961d-f2a03733a93b",
-  u_daily_dose: "40a87765-5e7a-4e77-a195-4b6815cec647",
-  u_anime_senpai: "928515e7-e012-41a6-8e27-13a89a75cffa",
-  u_desi_vibes: "ce36bbcd-f3f5-49c9-902b-cfed2bee425d",
-  u_crypto_chuckle: "2e3c58a5-3627-45ff-869b-6aab8e037973",
-  u_campus_life: "5ab796b8-e4c5-48b6-aa1c-0c17ffb91753",
-  u_absurd_humor: "c3a95623-310b-4306-a991-b2217b493f65",
-  u_reels_central: "15c81a0a-be0e-453b-b8fe-9b4a803e531f",
-  u_gaming_glitches: "2de8fd64-f05e-45d2-930d-fd1e6e331f5a",
+  u_dank_vault: "c2539f71-47df-4831-b6f4-f24491a4a5de",
+  dank_vault: "c2539f71-47df-4831-b6f4-f24491a4a5de",
+  u_tech_roasts: "941c6be1-b978-4984-a842-cf1e2634c1a9",
+  tech_roasts: "941c6be1-b978-4984-a842-cf1e2634c1a9",
+  u_daily_dose: "c7cc5edf-59cd-4074-8cd1-8af57c59ffa7",
+  daily_dose: "c7cc5edf-59cd-4074-8cd1-8af57c59ffa7",
+  u_anime_senpai: "90014ba5-2986-4e57-8034-3b8abda45e55",
+  anime_senpai: "90014ba5-2986-4e57-8034-3b8abda45e55",
+  u_desi_vibes: "12fd76f4-7197-4ed1-b191-ee37fb6e917a",
+  desi_vibes: "12fd76f4-7197-4ed1-b191-ee37fb6e917a",
+  u_crypto_chuckle: "f5631021-239f-4bb7-90a9-556f456b9777",
+  crypto_chuckle: "f5631021-239f-4bb7-90a9-556f456b9777",
+  u_campus_life: "d3203e02-c0eb-4fff-b45a-1d89aa62375b",
+  campus_life: "d3203e02-c0eb-4fff-b45a-1d89aa62375b",
+  u_absurd_humor: "e6bbc46f-d512-4252-abbd-b68c7286842f",
+  absurd_humor: "e6bbc46f-d512-4252-abbd-b68c7286842f",
+  u_reels_central: "15699dc5-4900-4365-93ee-a77d3cc21dad",
+  reels_central: "15699dc5-4900-4365-93ee-a77d3cc21dad",
+  u_gaming_glitches: "3b9a3eb5-d82c-4d61-804f-11b53b478b93",
+  gaming_glitches: "3b9a3eb5-d82c-4d61-804f-11b53b478b93",
 };
 
 export function toCanonicalUuid(userId: string): string {
-  return CREATOR_UUID_MAP[userId] || userId;
+  if (!userId) return userId;
+  if (CREATOR_UUID_MAP[userId]) return CREATOR_UUID_MAP[userId];
+  const withU = `u_${userId}`;
+  if (CREATOR_UUID_MAP[withU]) return CREATOR_UUID_MAP[withU];
+  return userId;
 }
 
 /** Sync a user holding & updated aura balance to Supabase PostgreSQL */

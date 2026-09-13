@@ -13,13 +13,10 @@ export async function GET(request: Request) {
       if (!error) {
         const isLocalEnv = process.env.NODE_ENV === "development";
         const forwardedHost = request.headers.get("x-forwarded-host");
-        if (isLocalEnv) {
-          return NextResponse.redirect(`${origin}${next}`);
-        } else if (forwardedHost) {
-          return NextResponse.redirect(`https://${forwardedHost}${next}`);
-        } else {
-          return NextResponse.redirect(`${origin}${next}`);
-        }
+        const targetUrl = isLocalEnv ? `${origin}${next}` : forwardedHost ? `https://${forwardedHost}${next}` : `${origin}${next}`;
+        const res = NextResponse.redirect(targetUrl);
+        res.cookies.set("logged_out", "", { path: "/", maxAge: 0 });
+        return res;
       }
     }
   }
