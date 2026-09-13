@@ -1,11 +1,12 @@
 import { NextRequest } from "next/server";
-import { db } from "@/lib/server/db";
+import { db, ensureHydrated } from "@/lib/server/db";
 import { ok, fail, requireUser } from "@/lib/server/http";
 import { memeView, commentView, publicUser, similarMemes } from "@/lib/server/views";
 import { getSeries } from "@/lib/server/market";
 import { trackMission } from "@/lib/server/progression";
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  await ensureHydrated();
   const user = await requireUser();
   const { id } = await ctx.params;
   const d = db();

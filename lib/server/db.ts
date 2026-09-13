@@ -2,7 +2,7 @@
 // backed by in-memory caching and debounced atomic writes.
 import fs from "fs";
 import path from "path";
-import { emptyWorld } from "./seed";
+import { seedWorld, emptyWorld } from "./seed";
 import { persistSnapshotToSupabase, hydrateFromSupabase, CREATOR_UUID_MAP } from "./sync";
 import type { DB } from "../types";
 
@@ -14,7 +14,7 @@ export const uploadsDir = UPLOADS_DIR;
 
 let state: DB | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
-let cloudHydrationPromise: Promise<void> | null = null;
+export let cloudHydrationPromise: Promise<void> | null = null;
 
 export function dataDirReady() {
   try {
@@ -64,25 +64,25 @@ export function db(): DB {
       // corrupted file — reset rather than crash
     }
   }
-  state = emptyWorld();
+  // Baseline demo world so cold-starts on Vercel are rich and active
+  state = seedWorld();
   normalizeDbUuids(state);
   triggerBackgroundCloudSync();
   persistNow();
   return state;
 }
 
-function triggerBackgroundCloudSync() {
-  if (cloudHydrationPromise) return;
+export function triggerBackgroundCloudSync(): Promise<void> {
+  if (cloudHydrationPromise) return cloudHydrationPromise;
   cloudHydrationPromise = (async () => {
     try {
       const cloudDb = await hydrateFromSupabase();
       if (cloudDb && cloudDb.memes?.length) {
-        // Merge cloud memes and profiles if newer
         if (state) {
           const existingMemeIds = new Set(state.memes.map((m) => m.id));
-          for (const cm of cloudDb.memes) {
-            if (!existingMemeIds.has(cm.id)) state.memes.push(cm);
-          }
+          const newMemes = cloudDb.memes.filter((m) => !existingMemeIds.has(m.id));
+          state.memes.unshift(...newMemes);
+
           const existingUserIds = new Set(state.users.map((u) => u.id));
           for (const cu of cloudDb.users) {
             if (!existingUserIds.has(cu.id)) state.users.push(cu);
@@ -93,6 +93,15 @@ function triggerBackgroundCloudSync() {
       console.warn("Background cloud hydration warning:", err);
     }
   })();
+  return cloudHydrationPromise;
+}
+
+export async function ensureHydrated(): Promise<DB> {
+  const current = db();
+  if (cloudHydrationPromise) {
+    try { await cloudHydrationPromise; } catch {}
+  }
+  return current;
 }
 
 export function save() {

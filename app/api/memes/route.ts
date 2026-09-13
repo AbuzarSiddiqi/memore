@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { db, uid, save } from "@/lib/server/db";
+import { db, uid, save, ensureHydrated } from "@/lib/server/db";
 import { ok, fail, humanError, requireUser, rateLimit } from "@/lib/server/http";
 import { getFeed, type FeedTab } from "@/lib/server/feed";
 import { memeView, publicUser } from "@/lib/server/views";
@@ -13,6 +13,7 @@ const TABS: FeedTab[] = ["foryou", "following", "trending", "new", "rising", "un
 const CATEGORIES = ["college", "gaming", "anime", "football", "programming", "bollywood", "technology", "workplace", "indian", "chaos"];
 
 export async function GET(req: NextRequest) {
+  await ensureHydrated();
   const user = await requireUser();
   const url = new URL(req.url);
   const tab = (url.searchParams.get("tab") ?? "foryou") as FeedTab;
@@ -25,6 +26,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    await ensureHydrated();
     const user = await requireUser();
     if (!user) return fail("Log in first.", 401);
     if (!rateLimit(`create:${user.id}`, 8, 60_000)) return fail("Easy there — too many posts in a minute.", 429);

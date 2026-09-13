@@ -12,7 +12,19 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ file: stri
   const { file } = await ctx.params;
   if (!/^[a-zA-Z0-9._-]+$/.test(file)) return new NextResponse("Not found", { status: 404 });
   const full = path.join(uploadsDir, file);
-  if (!fs.existsSync(full)) return new NextResponse("Not found", { status: 404 });
+  if (!fs.existsSync(full)) {
+    try {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      const admin = createAdminClient();
+      if (admin) {
+        const { data: { publicUrl } } = admin.storage.from("memes").getPublicUrl(file);
+        if (publicUrl) {
+          return NextResponse.redirect(publicUrl, 307);
+        }
+      }
+    } catch {}
+    return new NextResponse("Not found", { status: 404 });
+  }
   const ext = file.split(".").pop() ?? "";
   const buf = fs.readFileSync(full);
   return new NextResponse(new Uint8Array(buf), {

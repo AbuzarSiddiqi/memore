@@ -107,8 +107,14 @@ export function getFeed(tab: FeedTab, page: number, limit: number, user: Profile
     }
     default: {
       list = [...live()].sort((a, b) => scoreForYou(b, user) - scoreForYou(a, user));
-      if (event.id === "fresh") list = list.filter((m) => Date.now() - new Date(m.created_at).getTime() < 2 * DAY);
-      if (event.id === "wild") list = list.filter((m) => m.momentum > 0 || change24h(m) > 0 || hash(m.id) % 3 === 0);
+      if (event.id === "fresh") {
+        const freshList = list.filter((m) => Date.now() - new Date(m.created_at).getTime() < 2 * DAY);
+        if (freshList.length > 0) list = freshList;
+      }
+      if (event.id === "wild") {
+        const wildList = list.filter((m) => m.momentum > 0 || change24h(m) > 0 || hash(m.id) % 3 === 0);
+        if (wildList.length > 0) list = wildList;
+      }
     }
   }
   const start = page * limit;

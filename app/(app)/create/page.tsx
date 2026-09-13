@@ -16,8 +16,14 @@ async function uploadFile(file: File): Promise<Upload> {
   const form = new FormData();
   form.append("file", file);
   const res = await fetch("/api/upload", { method: "POST", body: form });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? "Upload failed. Try again.");
+  let data: any = null;
+  try {
+    data = await res.json();
+  } catch {
+    if (res.status === 401) throw new Error("Please log in first before uploading.");
+    throw new Error(`Upload failed (${res.status} ${res.statusText || "Server error"}). Try again.`);
+  }
+  if (!res.ok) throw new Error(data?.error ?? "Upload failed. Try again.");
   return data;
 }
 
