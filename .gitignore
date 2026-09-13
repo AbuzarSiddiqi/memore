@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# AURA runtime data
+.data/
+public/videos/*.mp4.bak

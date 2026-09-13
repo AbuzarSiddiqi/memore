@@ -1,0 +1,23 @@
+{
+  "name": "MEMORE — Don't Like. Invest.",
+  "short_name": "MEMORE",
+  "description": "Don't like. Invest. Double-tap memes to invest Aura and prove your predictions.",
+  "id": "/",
+  "start_url": "/home",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#7C4DFF",
+  "theme_color": "#7C4DFF",
+  "categories": ["social", "entertainment", "games"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Meme Market", "url": "/market" },
+    { "name": "My Vault", "url": "/vault" },
+    { "name": "Create Meme", "url": "/create" }
+  ]
+}
