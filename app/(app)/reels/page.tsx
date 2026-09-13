@@ -3,8 +3,9 @@
 // DOUBLE-TAP A REEL = INVEST AURA 1 (on native memes; IG embeds invest via chips).
 // Comments open Instagram-style: the media shrinks to a small square (still
 // playing) while the shared dark comment sheet slides up.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { api, fmtNum, useApi, useSession } from "@/lib/client";
 import { getCachedFeed, setCachedFeed, getMemoryCache } from "@/lib/client-cache";
 import type { FeedResponse, MemeView } from "@/lib/types";
@@ -14,6 +15,7 @@ import { Icon } from "@/components/icons";
 import { AuraBurst, useTapInvest } from "@/components/aura-burst";
 import { InstagramEmbed } from "@/components/instagram";
 import { Spark } from "@/components/brand";
+import { ShareSheet } from "@/components/share";
 
 const TAP_MS = 260;
 // home-feed rail style: same button type as the feed, but subtler and higher up
@@ -74,8 +76,8 @@ function CommentTicker({ memeId, active, refreshKey, onOpen }: { memeId: string;
   );
 }
 
-/** Same rail as the home feed: ✦ aura button first, then comments/remix/details. */
-function Rail({ meme, onComments, onInvest, dimmed }: { meme: MemeView; onComments: () => void; onInvest: () => void; dimmed?: boolean }) {
+/** Same rail as the home feed: ✦ aura button first, then comments/share/remix/details. */
+function Rail({ meme, onComments, onInvest, onShare, dimmed }: { meme: MemeView; onComments: () => void; onInvest: () => void; onShare: () => void; dimmed?: boolean }) {
   return (
     <div className={`absolute right-2.5 z-10 flex flex-col gap-2.5 items-center reel-fade ${dimmed ? "reel-hidden" : "reel-shown"}`} style={{ bottom: "max(112px, calc(env(safe-area-inset-bottom, 0px) + 112px))" }}>
       <button className={railBtn} onClick={(e) => { e.stopPropagation(); onInvest(); }} aria-label="Invest Aura in this meme">
@@ -85,6 +87,10 @@ function Rail({ meme, onComments, onInvest, dimmed }: { meme: MemeView; onCommen
       <button className={railBtn} onClick={(e) => { e.stopPropagation(); onComments(); }} aria-label="Comments">
         <Icon name="comment" size={17} strokeWidth={2.2} />
         <span className={railNum}>{meme.comment_count}</span>
+      </button>
+      <button className={railBtn} onClick={(e) => { e.stopPropagation(); onShare(); }} aria-label="Share">
+        <Icon name="share" size={17} strokeWidth={2.4} />
+        <span className={`${railNum} text-white`}>{meme.saves > 99 ? "99+" : meme.saves}</span>
       </button>
       <Link href={`/create?remix=${meme.id}`} onClick={(e) => e.stopPropagation()} className={railBtn} aria-label="Remix">
         <Icon name="repeat" size={17} strokeWidth={2.2} />
@@ -139,6 +145,7 @@ function VideoSlide({
   commentsOpen,
   onComments,
   onInvest,
+  onShare,
   dim,
   dataTick,
   muted,
@@ -151,6 +158,7 @@ function VideoSlide({
   commentsOpen: boolean;
   onComments: () => void;
   onInvest: () => void;
+  onShare: () => void;
   dim: boolean;
   dataTick: number;
   muted: boolean;
@@ -337,7 +345,7 @@ function VideoSlide({
         </div>
       </div>
       <AuraBurst events={events} />
-      <Rail meme={meme} onComments={onComments} onInvest={onInvest} dimmed={overlayDim} />
+      <Rail meme={meme} onComments={onComments} onInvest={onInvest} onShare={onShare} dimmed={overlayDim} />
       <InfoOverlay meme={meme} liveInvested={myInvested} dimmed={overlayDim} onInvest={onInvest}>
         <CommentTicker memeId={meme.id} active={active} refreshKey={dataTick} onOpen={onComments} />
       </InfoOverlay>
@@ -345,7 +353,25 @@ function VideoSlide({
   );
 }
 
-function ImageSlide({ meme, active, commentsOpen, onComments, onInvest, dim, dataTick }: { meme: MemeView; active: boolean; commentsOpen: boolean; onComments: () => void; onInvest: () => void; dim: boolean; dataTick: number }) {
+function ImageSlide({
+  meme,
+  active,
+  commentsOpen,
+  onComments,
+  onInvest,
+  onShare,
+  dim,
+  dataTick,
+}: {
+  meme: MemeView;
+  active: boolean;
+  commentsOpen: boolean;
+  onComments: () => void;
+  onInvest: () => void;
+  onShare: () => void;
+  dim: boolean;
+  dataTick: number;
+}) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const { events, tap, myInvested } = useTapInvest(meme, { prefix: "reel" });
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -378,7 +404,7 @@ function ImageSlide({ meme, active, commentsOpen, onComments, onInvest, dim, dat
         </div>
       </div>
       <AuraBurst events={events} />
-      <Rail meme={meme} onComments={onComments} onInvest={onInvest} dimmed={commentsOpen || dim} />
+      <Rail meme={meme} onComments={onComments} onInvest={onInvest} onShare={onShare} dimmed={commentsOpen || dim} />
       <InfoOverlay meme={meme} liveInvested={myInvested} dimmed={commentsOpen || dim} onInvest={onInvest}>
         <CommentTicker memeId={meme.id} active={active} refreshKey={dataTick} onOpen={onComments} />
       </InfoOverlay>
@@ -386,18 +412,51 @@ function ImageSlide({ meme, active, commentsOpen, onComments, onInvest, dim, dat
   );
 }
 
-function InstagramSlide({ meme, commentsOpen, onComments, onInvest, dim }: { meme: MemeView; commentsOpen: boolean; onComments: () => void; onInvest: () => void; dim: boolean }) {  return (
+function InstagramSlide({
+  meme,
+  commentsOpen,
+  onComments,
+  onInvest,
+  onShare,
+  dim,
+}: {
+  meme: MemeView;
+  commentsOpen: boolean;
+  onComments: () => void;
+  onInvest: () => void;
+  onShare: () => void;
+  dim: boolean;
+}) {
+  return (
     <div className="relative h-full w-full bg-black overflow-hidden">
       <div className={`reel-media absolute inset-x-0 flex items-start justify-center overflow-hidden ${commentsOpen ? "top-[52px] bottom-[calc(64px+34vh+12px)]" : "top-[52px] bottom-[168px]"}`}>
         <InstagramEmbed url={meme.source_url!} handle={meme.source_handle} />
       </div>
-      <Rail meme={meme} onComments={onComments} onInvest={onInvest} dimmed={commentsOpen || dim} />
+      <Rail meme={meme} onComments={onComments} onInvest={onInvest} onShare={onShare} dimmed={commentsOpen || dim} />
       <InfoOverlay meme={meme} dimmed={commentsOpen || dim} onInvest={onInvest} />
     </div>
   );
 }
 
 export default function ReelsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="h-full flex flex-col items-center justify-center gap-3 text-white bg-black">
+          <div className="w-12 h-12 rounded-full border-2 border-white/20 border-t-[#C8FF3D] animate-spin" />
+          <span className="hd font-bold text-sm tracking-wider text-white/80">LOADING REELS…</span>
+        </div>
+      }
+    >
+      <ReelsInner />
+    </Suspense>
+  );
+}
+
+function ReelsInner() {
+  const searchParams = useSearchParams();
+  const targetId = searchParams.get("id");
+  const { data: targetData } = useApi<{ meme: MemeView }>(targetId ? `/api/memes/${targetId}` : null);
   const { data, loading, refresh } = useApi<FeedResponse>("/api/memes?tab=mix&limit=24");
   const [cachedMemes, setCachedMemes] = useState<MemeView[]>(() => {
     if (typeof window !== "undefined") {
@@ -417,11 +476,13 @@ export default function ReelsPage() {
   const [active, setActive] = useState(0);
   const [commentsFor, setCommentsFor] = useState<MemeView | null>(null);
   const [investFor, setInvestFor] = useState<MemeView | null>(null);
+  const [shareFor, setShareFor] = useState<MemeView | null>(null);
   const [dataTick, setDataTick] = useState(0);
   const bumpFeed = useCallback(() => { refresh(); setDataTick((t) => t + 1); }, [refresh]);
   const [uiIdle, setUiIdle] = useState(false);
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const didInitialScroll = useRef(false);
 
   // Audio of reel is ON by default until explicitly turned off by the user
   const [muted, setMuted] = useState<boolean>(() => {
@@ -492,7 +553,26 @@ export default function ReelsPage() {
     return () => { if (idleTimer.current) clearTimeout(idleTimer.current); };
   }, [commentsFor, wake]);
 
-  const memes = (data?.memes && data.memes.length > 0) ? data.memes : cachedMemes;
+  const baseMemes = (data?.memes && data.memes.length > 0) ? data.memes : cachedMemes;
+  const memes = (() => {
+    if (!targetData?.meme) return baseMemes;
+    const exists = baseMemes.some((m) => m.id === targetData.meme.id);
+    if (!exists) return [targetData.meme, ...baseMemes];
+    return baseMemes;
+  })();
+
+  useEffect(() => {
+    if (!targetId || didInitialScroll.current || memes.length === 0) return;
+    const idx = memes.findIndex((m) => m.id === targetId);
+    if (idx >= 0 && containerRef.current) {
+      const el = containerRef.current.querySelector(`[data-idx="${idx}"]`) as HTMLElement | null;
+      if (el) {
+        el.scrollIntoView({ behavior: "instant" });
+        setActive(idx);
+        didInitialScroll.current = true;
+      }
+    }
+  }, [targetId, memes]);
 
   useEffect(() => {
     const c = containerRef.current;
@@ -551,9 +631,42 @@ export default function ReelsPage() {
         )}
         {memes.map((m, i) => (
           <div key={m.id} data-idx={i} className="h-full w-full snap-start snap-always">
-            {m.source === "instagram" ? <InstagramSlide meme={m} commentsOpen={commentsFor?.id === m.id} onComments={() => setCommentsFor(m)} onInvest={() => setInvestFor(m)} dim={uiIdle} />
-              : m.media_type === "video" ? <VideoSlide meme={m} idx={i} activeIndex={active} active={i === active} commentsOpen={commentsFor?.id === m.id} onComments={() => setCommentsFor(m)} onInvest={() => setInvestFor(m)} dim={uiIdle} dataTick={dataTick} muted={muted} onToggleMute={toggleMute} />
-                : <ImageSlide meme={m} active={i === active} commentsOpen={commentsFor?.id === m.id} onComments={() => setCommentsFor(m)} onInvest={() => setInvestFor(m)} dim={uiIdle} dataTick={dataTick} />}
+            {m.source === "instagram" ? (
+              <InstagramSlide
+                meme={m}
+                commentsOpen={commentsFor?.id === m.id}
+                onComments={() => setCommentsFor(m)}
+                onInvest={() => setInvestFor(m)}
+                onShare={() => setShareFor(m)}
+                dim={uiIdle}
+              />
+            ) : m.media_type === "video" ? (
+              <VideoSlide
+                meme={m}
+                idx={i}
+                activeIndex={active}
+                active={i === active}
+                commentsOpen={commentsFor?.id === m.id}
+                onComments={() => setCommentsFor(m)}
+                onInvest={() => setInvestFor(m)}
+                onShare={() => setShareFor(m)}
+                dim={uiIdle}
+                dataTick={dataTick}
+                muted={muted}
+                onToggleMute={toggleMute}
+              />
+            ) : (
+              <ImageSlide
+                meme={m}
+                active={i === active}
+                commentsOpen={commentsFor?.id === m.id}
+                onComments={() => setCommentsFor(m)}
+                onInvest={() => setInvestFor(m)}
+                onShare={() => setShareFor(m)}
+                dim={uiIdle}
+                dataTick={dataTick}
+              />
+            )}
           </div>
         ))}
         {!loading && memes.length === 0 && (
@@ -565,6 +678,14 @@ export default function ReelsPage() {
       </div>
       {commentsFor && <CommentsSheet meme={commentsFor} variant="reels" onClose={() => { setCommentsFor(null); bumpFeed(); }} />}
       {investFor && <InvestSheet meme={investFor} open onClose={() => { setInvestFor(null); bumpFeed(); }} />}
+      {shareFor && (
+        <ShareSheet
+          meme={shareFor}
+          open
+          onClose={() => { setShareFor(null); bumpFeed(); }}
+          onSent={() => bumpFeed()}
+        />
+      )}
     </div>
   );
 }

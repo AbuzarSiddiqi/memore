@@ -101,17 +101,20 @@ export default function MemeDetail({ params }: { params: Promise<{ id: string }>
     <div className="pb-10">
       {/* full-bleed hero */}
       <div className="-mx-4 -mt-2 relative bg-black">
-        <DoubleTapZone meme={m}>
+        <DoubleTapZone
+          meme={m}
+          onSingle={() => {
+            if (m.media_type === "video" || m.source === "instagram") {
+              router.push(`/reels?id=${m.id}`);
+            }
+          }}
+        >
           <MediaView meme={m} eager />
         </DoubleTapZone>
 
         {/* top controls */}
-        <div className="absolute top-3 left-3 right-3 flex items-center justify-between z-10">
-          <button onClick={() => router.back()} className="neo-btn icon !bg-black/55 !border-0 backdrop-blur-sm" aria-label="Back">←</button>
-          <div className="flex gap-2">
-            <button className={railBtn} onClick={() => setCallOpen(true)} aria-label="Make a call"><Icon name="megaphone" size={16} strokeWidth={2.2} /></button>
-            <button className={railBtn} onClick={() => setReportOpen(true)} aria-label="Report"><Icon name="flag" size={16} strokeWidth={2.2} /></button>
-          </div>
+        <div className="absolute top-3 left-3 right-3 flex items-center justify-between z-10 pointer-events-none">
+          <button onClick={() => router.back()} className="neo-btn icon !bg-black/55 !border-0 backdrop-blur-sm pointer-events-auto" aria-label="Back">←</button>
         </div>
 
         {/* right rail */}
@@ -171,7 +174,10 @@ export default function MemeDetail({ params }: { params: Promise<{ id: string }>
           </div>
           <div className="text-[11.5px] muted mt-0.5">launched at {fmtAura(m.initial_price)} · all-time <span className={m.change_all >= 0 ? "pos" : "neg"}>{fmtPct(m.change_all)}</span></div>
         </div>
-        <div className="flex flex-col gap-2 items-end">
+        <div className="flex flex-wrap gap-2 items-center justify-end">
+          <NeoButton variant="ghost" size="big" onClick={() => setCallOpen(true)} className="gap-1.5">
+            <Icon name="megaphone" size={16} strokeWidth={2.2} /> Predict
+          </NeoButton>
           <NeoButton variant="purple" size="big" onClick={() => setInvestOpen(true)}>✦ Invest</NeoButton>
           {mine && <NeoButton variant="coral" size="sm" onClick={() => setSellOpen(true)}>Sell position</NeoButton>}
         </div>
@@ -302,6 +308,16 @@ export default function MemeDetail({ params }: { params: Promise<{ id: string }>
       ) : (
         <div className="py-8 text-center hd muted text-xs">LOADING COMMENTS…</div>
       )}
+
+      {/* report action moved from media overlay */}
+      <div className="mt-10 pt-4 border-t border-white/10 flex justify-center">
+        <button
+          onClick={() => setReportOpen(true)}
+          className="text-xs text-white/40 hover:text-white/80 inline-flex items-center gap-1.5 py-2 px-3 rounded-lg transition-colors cursor-pointer"
+        >
+          <Icon name="flag" size={13} strokeWidth={2} /> Report this meme
+        </button>
+      </div>
 
       <InvestSheet meme={m} open={investOpen} onClose={() => setInvestOpen(false)} onDone={() => { refresh(); refreshSession(); }} />
       <SellSheet meme={m} open={sellOpen} onClose={() => setSellOpen(false)} onDone={() => { refresh(); refreshSession(); }} />

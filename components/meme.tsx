@@ -113,12 +113,22 @@ export function MediaView({ meme, className = "", eager = false }: { meme: MemeV
 export function VideoMedia({ meme, className = "" }: { meme: MemeView; className?: string }) {
   const ref = useRef<HTMLVideoElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const [muted, setMuted] = useState(true);
+  const [muted, setMuted] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const stored = localStorage.getItem("memore_reels_muted");
+        if (stored !== null) return stored === "true";
+      } catch {}
+    }
+    return false; // Sound ON by default
+  });
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const [paused, setPaused] = useState(false);
   const [error, setError] = useState(false);
   const [progress, setProgress] = useState(0);
   const [ready, setReady] = useState(false);
 
+  const isMutedNow = muted || autoplayBlocked;
   const isVideoThumb = meme.thumbnail_url?.match(/\.(mp4|webm|mov|m4v)(\?.*)?$/i);
   const posterUrl = !isVideoThumb && meme.thumbnail_url ? meme.thumbnail_url : undefined;
   const videoSrc = meme.media_url?.includes("#") ? meme.media_url : `${meme.media_url}#t=0.001`;
@@ -129,21 +139,51 @@ export function VideoMedia({ meme, className = "" }: { meme: MemeView; className
     if (!video || !wrap) return;
     const io = new IntersectionObserver(
       ([entry]) => {
-        if (entry.intersectionRatio > 0.55) video.play().then(() => setPaused(false)).catch(() => {});
-        else video.pause();
+        if (entry.intersectionRatio > 0.45) {
+          video.muted = muted;
+          video.play().then(() => setPaused(false)).catch(() => {
+            if (!muted) {
+              setAutoplayBlocked(true);
+              video.muted = true;
+              video.play().then(() => setPaused(false)).catch(() => {});
+            }
+          });
+        } else {
+          video.pause();
+        }
       },
-      { threshold: [0, 0.55, 1] }
+      { threshold: [0, 0.45, 1] }
     );
     io.observe(wrap);
     return () => io.disconnect();
-  }, []);
+  }, [muted]);
 
-  const toggle = useCallback(() => {
-    const v = ref.current;
-    if (!v) return;
-    if (v.paused) { v.play().catch(() => {}); setPaused(false); }
-    else { v.pause(); setPaused(true); }
-  }, []);
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.muted = isMutedNow;
+    }
+  }, [isMutedNow]);
+
+  const toggleMute = useCallback((e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (autoplayBlocked) {
+      setAutoplayBlocked(false);
+      if (ref.current) ref.current.muted = false;
+      setMuted(false);
+      try {
+        localStorage.setItem("memore_reels_muted", "false");
+      } catch {}
+    } else {
+      setMuted((prev) => {
+        const next = !prev;
+        try {
+          localStorage.setItem("memore_reels_muted", next ? "true" : "false");
+        } catch {}
+        if (ref.current) ref.current.muted = next;
+        return next;
+      });
+    }
+  }, [autoplayBlocked]);
 
   if (error) {
     return (
@@ -156,12 +196,22 @@ export function VideoMedia({ meme, className = "" }: { meme: MemeView; className
   }
 
   return (
-    <div ref={wrapRef} className={`relative bg-black ${className}`} style={{ aspectRatio: `${meme.width}/${meme.height}` }}>
+    <div
+      ref={wrapRef}
+      className={`relative bg-black ${className}`}
+      style={{ aspectRatio: `${meme.width}/${meme.height}` }}
+      onPointerDown={() => {
+        if (!muted && autoplayBlocked && ref.current) {
+          setAutoplayBlocked(false);
+          ref.current.muted = false;
+        }
+      }}
+    >
       <video
         ref={ref}
         src={videoSrc}
         poster={posterUrl}
-        muted={muted}
+        muted={isMutedNow}
         loop
         playsInline
         preload="metadata"
@@ -185,13 +235,14 @@ export function VideoMedia({ meme, className = "" }: { meme: MemeView; className
           <span className="w-14 h-14 rounded-full bg-black/50 flex items-center justify-center text-white"><Icon name="play" size={26} filled /></span>
         </div>
       )}
-      <div className="absolute top-2.5 right-2.5 flex gap-2 z-10">
+      <div className="absolute top-3 right-3 flex gap-2 z-20 pointer-events-auto">
         <button
-          className="neo-btn icon !bg-black/55 !border-0 backdrop-blur-sm !text-white"
-          onClick={(e) => { e.stopPropagation(); setMuted((m) => !m); }}
-          aria-label={muted ? "Unmute" : "Mute"}
+          className="neo-btn sm !bg-black/55 !border-0 text-white backdrop-blur-sm !rounded-full !px-3 !py-1 text-[11px] gap-1.5"
+          onClick={toggleMute}
+          aria-label={isMutedNow ? "Turn sound on" : "Turn sound off"}
         >
-          <Icon name={muted ? "volume-off" : "volume-on"} size={16} strokeWidth={2.2} />
+          <Icon name={isMutedNow ? "volume-off" : "volume-on"} size={14} />
+          <span>{isMutedNow ? (autoplayBlocked ? "Tap for sound" : "Sound off") : "Sound on"}</span>
         </button>
       </div>
       <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/15 z-10">
