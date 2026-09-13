@@ -32,8 +32,12 @@ export default function HomePage() {
     setLoading(true);
     try {
       const r = await api<FeedResponse>(`/api/memes?tab=${t}&page=${p}&limit=6`);
-      setPages((prev) => (replace ? [r.memes] : [...prev, r.memes]));
-      setHasMore(r.has_more);
+      if (r && Array.isArray(r.memes)) {
+        setPages((prev) => (replace ? [r.memes] : [...prev, r.memes]));
+        setHasMore(r.has_more);
+      }
+    } catch (err) {
+      console.warn("Feed load error:", err);
     } finally {
       setLoading(false);
     }
@@ -55,7 +59,7 @@ export default function HomePage() {
   useEffect(() => { loadMissions(); }, [loadMissions]);
 
   useEffect(() => {
-    if (loading || !hasMore || page === 0) return;
+    if (loading || !hasMore) return;
     const el = sentinel.current;
     if (!el) return;
     const io = new IntersectionObserver(([e]) => {
@@ -69,7 +73,7 @@ export default function HomePage() {
     return () => io.disconnect();
   }, [loading, hasMore, page, tab, loadPage]);
 
-  const memes = pages.flat();
+  const memes = Array.from(new Map(pages.flat().map((m) => [m.id, m])).values());
   const refresh = useCallback(() => { loadPage(0, tab, true); loadMissions(); }, [tab, loadPage, loadMissions]);
 
   // realtime counts: any invest/sell anywhere (double-tap, sheets) refetches the

@@ -8,7 +8,7 @@ import type { EventView, MarketSection, Meme, MemeView, Profile, SeasonView } fr
 const DAY = 86_400_000;
 
 function live(): Meme[] {
-  return db().memes.filter((m) => m.status === "live");
+  return db().memes.filter((m) => m.status === "live").sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
 function scoreForYou(m: Meme, user: Profile | null): number {
@@ -91,23 +91,17 @@ export function getFeed(tab: FeedTab, page: number, limit: number, user: Profile
       break;
     }
     case "mix": {
-      // Reels view: prioritize real video memes, then other real memes
-      const vids = live().filter((m) => m.media_type === "video");
-      const others = live().filter((m) => m.media_type !== "video");
+      // Reels view: prioritize newest real video memes, then newest other memes
+      const vids = live().filter((m) => m.media_type === "video").sort((a, b) => b.created_at.localeCompare(a.created_at));
+      const others = live().filter((m) => m.media_type !== "video").sort((a, b) => b.created_at.localeCompare(a.created_at));
       list = [...vids, ...others];
-      if (list.length === 0) list = live();
+      if (list.length === 0) list = live().sort((a, b) => b.created_at.localeCompare(a.created_at));
       break;
     }
     default: {
-      list = [...live()].sort((a, b) => scoreForYou(b, user) - scoreForYou(a, user));
-      if (event.id === "fresh") {
-        const freshList = list.filter((m) => Date.now() - new Date(m.created_at).getTime() < 2 * DAY);
-        if (freshList.length > 0) list = freshList;
-      }
-      if (event.id === "wild") {
-        const wildList = list.filter((m) => m.momentum > 0 || change24h(m) > 0 || hash(m.id) % 3 === 0);
-        if (wildList.length > 0) list = wildList;
-      }
+      // Instagram-style Home feed: newest released posts appear first
+      list = [...live()].sort((a, b) => b.created_at.localeCompare(a.created_at));
+      break;
     }
   }
   const start = page * limit;

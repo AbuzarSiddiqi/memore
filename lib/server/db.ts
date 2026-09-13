@@ -97,16 +97,32 @@ export function db(): DB {
   return state;
 }
 
+let lastCloudSyncAt = 0;
+let inFlightSync: Promise<DB> | null = null;
+
 export function triggerBackgroundCloudSync(): Promise<void> {
-  if (cloudHydrationPromise) return cloudHydrationPromise;
-  cloudHydrationPromise = (async () => {
+  return ensureHydrated().then(() => {});
+}
+
+export async function ensureHydrated(force = false): Promise<DB> {
+  const current = db();
+  const now = Date.now();
+  if (!force && lastCloudSyncAt > 0 && now - lastCloudSyncAt < 3000) {
+    return current;
+  }
+  if (inFlightSync) {
+    try { await inFlightSync; } catch {}
+    return current;
+  }
+
+  inFlightSync = (async () => {
     try {
       const cloudDb = await hydrateFromSupabase();
       if (cloudDb && state) {
-        // Authoritative memes directly from Supabase PostgreSQL (no fake memes)
+        // Authoritative memes directly from Supabase PostgreSQL (ordered newest first)
         state.memes = cloudDb.memes;
 
-        const existingUserIds = new Set(state.users.map((u) => u.id));
+        // Merge users/profiles
         for (const cu of cloudDb.users) {
           const idx = state.users.findIndex((u) => u.id === cu.id);
           if (idx >= 0) {
@@ -118,19 +134,20 @@ export function triggerBackgroundCloudSync(): Promise<void> {
         if (cloudDb.holdings?.length) state.holdings = cloudDb.holdings;
         if (cloudDb.transactions?.length) state.transactions = cloudDb.transactions;
         if (cloudDb.comments?.length) state.comments = cloudDb.comments;
+
+        normalizeDbUuids(state);
+        lastCloudSyncAt = Date.now();
+        persistNow();
       }
     } catch (err) {
-      console.warn("Background cloud hydration warning:", err);
+      console.warn("ensureHydrated cloud sync warning:", err);
+    } finally {
+      inFlightSync = null;
     }
+    return current;
   })();
-  return cloudHydrationPromise;
-}
 
-export async function ensureHydrated(): Promise<DB> {
-  const current = db();
-  if (cloudHydrationPromise) {
-    try { await cloudHydrationPromise; } catch {}
-  }
+  try { await inFlightSync; } catch {}
   return current;
 }
 

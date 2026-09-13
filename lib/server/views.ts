@@ -87,7 +87,26 @@ export function dnaMatch(a: Meme, b: Meme): number {
 
 export function memeView(m: Meme, viewerId?: string | null): MemeView {
   const d = db();
-  const creator = d.users.find((u) => u.id === m.creator_id)!;
+  const creator = d.users.find((u) => u.id === m.creator_id) || {
+    id: m.creator_id,
+    email: "",
+    password_hash: "",
+    username: "creator",
+    display_name: "Creator",
+    avatar_bg: "#7C4DFF",
+    bio: "",
+    aura_balance: 100,
+    reputation: 0,
+    level: 1,
+    xp: 0,
+    role: "user" as const,
+    is_seed: false,
+    interests: [],
+    onboarded: true,
+    suspended: false,
+    hunter: { score: 0, early_discoveries: 0, successful_picks: 0 },
+    created_at: m.created_at,
+  };
   const commentCount = d.comments.filter((c) => c.meme_id === m.id).length;
   // compact sparkline: last 12 sampled history points
   const hist = d.price_history[m.id] ?? [];

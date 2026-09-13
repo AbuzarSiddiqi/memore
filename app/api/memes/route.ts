@@ -21,7 +21,16 @@ export async function GET(req: NextRequest) {
   const limit = Math.min(24, Math.max(2, parseInt(url.searchParams.get("limit") ?? "6", 10) || 6));
   if (!TABS.includes(tab)) return fail("Unknown feed tab.");
   const result = getFeed(tab, page, limit, user);
-  return ok({ ...result, page, event: eventAndSeason().event, season: eventAndSeason().season });
+  return ok(
+    { ...result, page, event: eventAndSeason().event, season: eventAndSeason().season },
+    {
+      headers: {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
+      },
+    }
+  );
 }
 
 export async function POST(req: NextRequest) {
@@ -146,6 +155,9 @@ export async function POST(req: NextRequest) {
           created_at: meme.created_at,
           updated_at: meme.updated_at,
         }, { onConflict: "id" });
+
+        // Ensure in-memory state and cloud state are immediately synchronized
+        await ensureHydrated(true);
       }
     } catch (err) {
       console.error("Supabase meme sync error:", err);

@@ -25,9 +25,11 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     .sort((a, b) => b.quantity - a.quantity)
     .slice(0, 12)
     .map((h) => {
-      const u = d.users.find((x) => x.id === h.user_id)!;
+      const u = d.users.find((x) => x.id === h.user_id);
+      if (!u) return null;
       return { ...publicUser(u), position_value: Math.round(h.quantity * meme.current_price * 10) / 10 };
-    });
+    })
+    .filter(Boolean);
 
   const children = d.remixes.filter((r) => r.original_meme_id === id).map((r) => r.remix_meme_id);
   const rootId = (() => {
