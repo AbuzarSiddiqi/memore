@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     };
     meme.current_price = priceFromNet(0);
-    d.memes.push(meme);
+    d.memes.unshift(meme);
 
     if (parent) {
       d.remixes.push({ id: uid(), original_meme_id: parent.id, remix_meme_id: meme.id, creator_id: user.id, created_at: meme.created_at });
@@ -95,8 +95,30 @@ export async function POST(req: NextRequest) {
       const admin = createAdminClient();
       if (admin) {
         let creatorUuid = user.id;
-        const { data: prof } = await admin.from("profiles").select("id").eq("email", user.email).single();
-        if (prof?.id) creatorUuid = prof.id;
+        const { data: prof } = await admin.from("profiles").select("id").eq("email", user.email).maybeSingle();
+        if (prof?.id) {
+          creatorUuid = prof.id;
+        } else {
+          await admin.from("profiles").upsert({
+            id: creatorUuid,
+            email: user.email,
+            username: user.username,
+            display_name: user.display_name,
+            avatar_bg: user.avatar_bg,
+            aura_balance: user.aura_balance,
+            reputation: user.reputation,
+            level: user.level,
+            xp: user.xp,
+            role: user.role,
+            is_seed: false,
+            interests: user.interests,
+            onboarded: user.onboarded,
+            suspended: user.suspended,
+            hunter_score: user.hunter?.score || 0,
+            early_discoveries: user.hunter?.early_discoveries || 0,
+            successful_picks: user.hunter?.successful_picks || 0,
+          }, { onConflict: "id" });
+        }
 
         await admin.from("memes").upsert({
           id: meme.id,

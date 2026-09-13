@@ -16,6 +16,77 @@ import fs from "fs";
 import path from "path";
 
 export const CHAT_TTL_MS = 24 * 60 * 60 * 1000;
+const CHATS_FILE = "chats_v2.json";
+let chatHydrationPromise: Promise<void> | null = null;
+
+export async function hydrateChats(): Promise<void> {
+  if (chatHydrationPromise) return chatHydrationPromise;
+  chatHydrationPromise = (async () => {
+    try {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      const admin = createAdminClient();
+      if (!admin) return;
+      const { data, error } = await admin.storage.from("system").download(CHATS_FILE);
+      if (!error && data) {
+        const text = await data.text();
+        const parsed = JSON.parse(text);
+        const d = db();
+        ensureChats(d);
+        if (Array.isArray(parsed.chats)) {
+          for (const c of parsed.chats) {
+            const idx = d.chats.findIndex((x) => x.id === c.id);
+            if (idx >= 0) d.chats[idx] = c;
+            else d.chats.push(c);
+          }
+        }
+        if (Array.isArray(parsed.chat_messages)) {
+          for (const m of parsed.chat_messages) {
+            const idx = d.chat_messages.findIndex((x) => x.id === m.id);
+            if (idx >= 0) d.chat_messages[idx] = m;
+            else d.chat_messages.push(m);
+          }
+        }
+        if (Array.isArray(parsed.message_reactions)) {
+          for (const r of parsed.message_reactions) {
+            const idx = d.message_reactions.findIndex((x) => x.id === r.id);
+            if (idx >= 0) d.message_reactions[idx] = r;
+            else d.message_reactions.push(r);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("hydrateChats warning:", err);
+    } finally {
+      chatHydrationPromise = null;
+    }
+  })();
+  return chatHydrationPromise;
+}
+
+let persistChatTimer: ReturnType<typeof setTimeout> | null = null;
+export function persistChats(): void {
+  if (persistChatTimer) clearTimeout(persistChatTimer);
+  persistChatTimer = setTimeout(async () => {
+    try {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      const admin = createAdminClient();
+      if (!admin) return;
+      const d = db();
+      ensureChats(d);
+      const payload = Buffer.from(JSON.stringify({
+        chats: d.chats,
+        chat_messages: d.chat_messages,
+        message_reactions: d.message_reactions,
+      }));
+      await admin.storage.from("system").upload(CHATS_FILE, payload, {
+        contentType: "application/json",
+        upsert: true,
+      });
+    } catch (err) {
+      console.warn("persistChats warning:", err);
+    }
+  }, 100);
+}
 
 // Old db.json files predate the chat collections — backfill them lazily.
 export function ensureChats(d: ReturnType<typeof db>): void {
@@ -74,6 +145,7 @@ export function expireChats(): void {
     }
   }
   save();
+  persistChats();
 }
 
 function activeChats(d: ReturnType<typeof db>): ChatConversation[] {
@@ -169,6 +241,7 @@ export function getOrCreateConversation(user: Profile, otherUsername: string): {
   };
   d.chats.push(conversation);
   save();
+  persistChats();
   return { conversation, other };
 }
 
@@ -285,6 +358,7 @@ export function sendMessage(user: Profile, conversationId: string, input: SendIn
   d.chat_messages.push(message);
   c.reads = { ...c.reads, [user.id]: message.created_at }; // sender has read up to now
   save();
+  persistChats();
   return {
     ...message,
     post: message.type === "post" && message.post_id ? postPreview(message.post_id, user.id) : null,
@@ -319,6 +393,7 @@ export function reactToMessage(user: Profile, conversationId: string, messageId:
     d.message_reactions.push({ id: uid(), message_id: messageId, user_id: user.id, reaction_id: reactionId, created_at: new Date().toISOString() });
   }
   save();
+  persistChats();
   return { reactions: summarizeReactions(d.message_reactions, messageId, user.id) };
 }
 
@@ -338,6 +413,7 @@ export function unsendMessage(user: Profile, conversationId: string, messageId: 
   d.chat_messages = d.chat_messages.filter((x) => x.id !== messageId);
   d.message_reactions = d.message_reactions.filter((r) => r.message_id !== messageId);
   save();
+  persistChats();
   return { ok: true };
 }
 
@@ -348,6 +424,7 @@ export function markRead(user: Profile, conversationId: string): boolean {
   if (!c || !c.participants.includes(user.id) || c.status !== "active") return false;
   c.reads = { ...c.reads, [user.id]: new Date().toISOString() };
   save();
+  persistChats();
   return true;
 }
 
@@ -358,6 +435,7 @@ export function toggleMute(user: Profile, conversationId: string): boolean {
   if (!c || !c.participants.includes(user.id)) return false;
   c.muted = { ...c.muted, [user.id]: !c.muted?.[user.id] };
   save();
+  persistChats();
   return !!c.muted[user.id];
 }
 

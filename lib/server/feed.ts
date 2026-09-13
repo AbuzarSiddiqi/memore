@@ -56,25 +56,28 @@ export function getFeed(tab: FeedTab, page: number, limit: number, user: Profile
     case "new":
       list = [...live()].sort((a, b) => b.created_at.localeCompare(a.created_at));
       break;
-    case "rising":
-      list = [...live()].filter((m) => change24h(m) > 6).sort((a, b) => b.momentum - a.momentum);
+    case "rising": {
+      const risingList = [...live()].filter((m) => change24h(m) > 6).sort((a, b) => b.momentum - a.momentum);
+      list = risingList.length > 0 ? risingList : [...live()].sort((a, b) => b.momentum - a.momentum);
       break;
+    }
     case "undervalued": {
       const median = medianPrice();
-      list = [...live()]
+      const under = [...live()]
         .filter((m) => m.current_price < median && m.volume_24h > 8)
         .sort((a, b) => b.volume_24h / b.current_price - a.volume_24h / a.current_price);
+      list = under.length > 0 ? under : [...live()].sort((a, b) => a.current_price - b.current_price);
       break;
     }
     case "hunter": {
-      // EARLY SIGNALS: small but moving — the ones likely to explode before it's obvious
       const median = medianPrice();
-      list = [...live()]
+      const hunted = [...live()]
         .filter((m) => {
           const ageH = (Date.now() - new Date(m.created_at).getTime()) / 3_600_000;
           return ageH < 96 && m.views < 4000 && (m.momentum > 0.15 || change24h(m) > 8) && m.current_price < median * 1.4;
         })
         .sort((a, b) => signalScore(b) - signalScore(a));
+      list = hunted.length > 0 ? hunted : [...live()].sort((a, b) => signalScore(b) - signalScore(a));
       break;
     }
     case "chaos": {
@@ -88,21 +91,11 @@ export function getFeed(tab: FeedTab, page: number, limit: number, user: Profile
       break;
     }
     case "mix": {
-      // Reels view: weave videos (local + Instagram reels) with the occasional image post.
-      const ig = shuffleSeeded(live().filter((m) => m.source === "instagram"));
-      const vids = shuffleSeeded(live().filter((m) => m.source !== "instagram" && m.media_type === "video"));
-      const imgs = shuffleSeeded(live().filter((m) => m.source !== "instagram" && m.media_type === "image"));
-      const out: Meme[] = [];
-      const seen = new Set<string>();
-      const push = (m?: Meme) => { if (m && !seen.has(m.id)) { seen.add(m.id); out.push(m); } };
-      let vi = 0, ii = 0, gi = 0;
-      while (out.length < 30) {
-        push(vids[vi++]);
-        if (vi % 2 === 0) push(imgs[ii++]);
-        if (vi % 3 === 2) push(ig[gi++]);
-        if (vi > vids.length && ii > imgs.length && gi > ig.length) break;
-      }
-      list = out;
+      // Reels view: prioritize real video memes, then other real memes
+      const vids = live().filter((m) => m.media_type === "video");
+      const others = live().filter((m) => m.media_type !== "video");
+      list = [...vids, ...others];
+      if (list.length === 0) list = live();
       break;
     }
     default: {

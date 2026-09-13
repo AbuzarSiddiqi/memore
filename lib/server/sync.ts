@@ -216,27 +216,17 @@ export async function hydrateFromSupabase(): Promise<DB | null> {
   if (!admin) return null;
 
   try {
-    // 1. Try downloading cloud state snapshot
-    const { data, error } = await admin.storage.from("system").download(CLOUD_STATE_FILE);
-    if (!error && data) {
-      const text = await data.text();
-      const parsed = JSON.parse(text) as DB;
-      if (parsed && Array.isArray(parsed.memes) && Array.isArray(parsed.users)) {
-        return parsed;
-      }
-    }
-
-    // 2. Alternatively, reconstruct state directly from PostgreSQL tables
-    const { data: dbMemes } = await admin.from("memes").select("*");
+    // Query authoritative PostgreSQL tables directly — real Supabase data ONLY
+    const { data: dbMemes, error: memeErr } = await admin.from("memes").select("*").order("created_at", { ascending: false });
+    if (memeErr) console.error("[Supabase Sync] Error fetching memes:", memeErr);
     const { data: dbProfiles } = await admin.from("profiles").select("*");
     const { data: dbHoldings } = await admin.from("holdings").select("*");
     const { data: dbTransactions } = await admin.from("transactions").select("*");
     const { data: dbComments } = await admin.from("comments").select("*");
 
-    if (dbMemes && dbMemes.length > 0) {
-      console.log(`[Supabase Sync] Hydrated ${dbMemes.length} memes and ${dbProfiles?.length || 0} profiles from PostgreSQL.`);
-      // Form structured DB object
-      const reconstructedMemes: Meme[] = dbMemes.map((m: any) => ({
+    console.log(`[Supabase Sync] Hydrated ${dbMemes?.length || 0} real memes and ${dbProfiles?.length || 0} profiles from PostgreSQL.`);
+    // Form structured DB object
+    const reconstructedMemes: Meme[] = (dbMemes || []).map((m: any) => ({
         id: m.id,
         creator_id: m.creator_id,
         caption: m.caption,
@@ -365,7 +355,6 @@ export async function hydrateFromSupabase(): Promise<DB | null> {
         user_daily: [],
         meta: { last_tick: Date.now(), tick_count: 0, version: 2 },
       };
-    }
   } catch (err) {
     console.error("Supabase hydration error:", err);
   }

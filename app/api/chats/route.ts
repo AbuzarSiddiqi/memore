@@ -1,8 +1,11 @@
 import { NextRequest } from "next/server";
 import { requireUser, ok, fail, rateLimit } from "@/lib/server/http";
-import { getOrCreateConversation, listChats, expireChats } from "@/lib/server/chats";
+import { ensureHydrated } from "@/lib/server/db";
+import { getOrCreateConversation, listChats, expireChats, hydrateChats } from "@/lib/server/chats";
 
 export async function GET() {
+  await ensureHydrated();
+  await hydrateChats();
   const user = await requireUser();
   if (!user) return fail("Log in first.", 401);
   expireChats(); // server-authoritative cleanup, idempotent
@@ -10,6 +13,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  await ensureHydrated();
+  await hydrateChats();
   const user = await requireUser();
   if (!user) return fail("Log in first.", 401);
   if (!rateLimit(`chat-create:${user.id}`, 20, 60_000)) return fail("Slow down.", 429);

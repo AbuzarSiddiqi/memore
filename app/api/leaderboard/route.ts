@@ -1,10 +1,11 @@
-import { db } from "@/lib/server/db";
+import { db, ensureHydrated } from "@/lib/server/db";
 import { ok, requireUser } from "@/lib/server/http";
 import { publicUser } from "@/lib/server/views";
 import { change24h } from "@/lib/server/market";
 import { predictionIQ, seasonInfo } from "@/lib/server/progression";
 
 export async function GET(req: Request) {
+  await ensureHydrated();
   const viewer = await requireUser();
   const url = new URL(req.url);
   const period = url.searchParams.get("period") ?? "all";
@@ -42,8 +43,8 @@ export async function GET(req: Request) {
     .sort((a, b) => change24h(b) - change24h(a))
     .slice(0, 10)
     .map((m) => {
-      const creator = d.users.find((u) => u.id === m.creator_id)!;
-      return { id: m.id, caption: m.caption, media_url: m.thumbnail_url, change_24h: change24h(m), price: m.current_price, creator: creator.username };
+      const creator = d.users.find((u) => u.id === m.creator_id);
+      return { id: m.id, caption: m.caption, media_url: m.thumbnail_url, change_24h: change24h(m), price: m.current_price, creator: creator?.username || "creator" };
     });
 
   return ok({

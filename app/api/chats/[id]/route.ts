@@ -1,8 +1,11 @@
 import { NextRequest } from "next/server";
 import { requireUser, ok, fail } from "@/lib/server/http";
-import { getChatDetail, expireChats, markRead } from "@/lib/server/chats";
+import { ensureHydrated } from "@/lib/server/db";
+import { getChatDetail, expireChats, markRead, hydrateChats } from "@/lib/server/chats";
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  await ensureHydrated();
+  await hydrateChats();
   const user = await requireUser();
   if (!user) return fail("Log in first.", 401);
   expireChats(); // the server decides when a chat is dead — never the client

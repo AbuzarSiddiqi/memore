@@ -504,31 +504,8 @@ export const CREATOR_ACCOUNTS = [
 ];
 
 export function emptyWorld(): DB {
-  const creatorHash = hashPw("MemeCreator2026!");
-  const now = new Date().toISOString();
-  const users: Profile[] = CREATOR_ACCOUNTS.map((c) => ({
-    id: `u_${c.username}`,
-    email: c.email,
-    password_hash: creatorHash,
-    username: c.username,
-    display_name: c.display_name,
-    avatar_bg: c.avatar_bg,
-    bio: c.bio,
-    aura_balance: 100,
-    reputation: 100,
-    level: 1,
-    xp: 0,
-    role: "admin",
-    is_seed: false,
-    interests: c.interests,
-    onboarded: true,
-    suspended: false,
-    hunter: { score: 50, early_discoveries: 0, successful_picks: 0 },
-    created_at: now,
-  }));
-
   return {
-    users,
+    users: [],
     memes: [],
     holdings: [],
     transactions: [],

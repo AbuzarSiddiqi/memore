@@ -251,7 +251,10 @@ export default function ChatPage() {
       setDetail(d);
     } catch (e) {
       if (!alive.current) return;
-      setGone((e as Error).message);
+      const msg = (e as Error).message || "";
+      if (msg === "expired" || msg.includes("disappeared") || msg.includes("Too late")) {
+        setGone("expired");
+      }
     }
   }, [id]);
 

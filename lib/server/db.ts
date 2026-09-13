@@ -64,11 +64,10 @@ export function db(): DB {
       // corrupted file — reset rather than crash
     }
   }
-  // Baseline demo world so cold-starts on Vercel are rich and active
-  state = seedWorld();
+  // Clean start — real memes hydrate directly from Supabase PostgreSQL
+  state = emptyWorld();
   normalizeDbUuids(state);
   triggerBackgroundCloudSync();
-  persistNow();
   return state;
 }
 
@@ -77,17 +76,22 @@ export function triggerBackgroundCloudSync(): Promise<void> {
   cloudHydrationPromise = (async () => {
     try {
       const cloudDb = await hydrateFromSupabase();
-      if (cloudDb && cloudDb.memes?.length) {
-        if (state) {
-          const existingMemeIds = new Set(state.memes.map((m) => m.id));
-          const newMemes = cloudDb.memes.filter((m) => !existingMemeIds.has(m.id));
-          state.memes.unshift(...newMemes);
+      if (cloudDb && state) {
+        // Authoritative memes directly from Supabase PostgreSQL (no fake memes)
+        state.memes = cloudDb.memes;
 
-          const existingUserIds = new Set(state.users.map((u) => u.id));
-          for (const cu of cloudDb.users) {
-            if (!existingUserIds.has(cu.id)) state.users.push(cu);
+        const existingUserIds = new Set(state.users.map((u) => u.id));
+        for (const cu of cloudDb.users) {
+          const idx = state.users.findIndex((u) => u.id === cu.id);
+          if (idx >= 0) {
+            state.users[idx] = { ...state.users[idx], ...cu };
+          } else {
+            state.users.push(cu);
           }
         }
+        if (cloudDb.holdings?.length) state.holdings = cloudDb.holdings;
+        if (cloudDb.transactions?.length) state.transactions = cloudDb.transactions;
+        if (cloudDb.comments?.length) state.comments = cloudDb.comments;
       }
     } catch (err) {
       console.warn("Background cloud hydration warning:", err);
