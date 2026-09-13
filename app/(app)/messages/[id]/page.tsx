@@ -8,6 +8,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { api, useApi, useSession, useToast } from "@/lib/client";
 import { getCachedMessages, appendCachedMessages, purgeExpiredChatLocal, getCachedChats, removeCachedMessage, updateCachedMessageReactions } from "@/lib/client-cache";
+import { playSfx } from "@/lib/sfx";
 
 import type { ChatDetail, ChatMessageView, ChatReplyRef, MemeView } from "@/lib/types";
 import { REACTION_IDS } from "@/lib/reactions";
@@ -615,6 +616,7 @@ export default function ChatPage() {
   };
 
   const react = async (msgId: string, reactionId: string) => {
+    playSfx("reaction");
     setReactTo(null);
     setPickerOpen(false);
     // Optimistic local reaction update
@@ -686,6 +688,7 @@ export default function ChatPage() {
       });
       setReplyTo(null);
       if (res?.message) {
+        playSfx("send");
         const updated = await appendCachedMessages(id, [res.message], detail?.conversation.expires_at);
         lastSyncCursorRef.current = res.message.created_at;
         setDetail((prev) => (prev ? { ...prev, messages: updated } : prev));
@@ -708,6 +711,7 @@ export default function ChatPage() {
   };
 
   const unsend = async (msgId: string) => {
+    playSfx("unsend");
     setReactTo(null);
     setPickerOpen(false);
     // Optimistic local delete

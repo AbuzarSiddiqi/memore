@@ -29,7 +29,7 @@ self.addEventListener("fetch", (event) => {
   }
 
   // static assets: cache first
-  if (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/memes/") || url.pathname.startsWith("/videos/") || url.pathname.startsWith("/icons/")) {
+  if (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/sfx/") || url.pathname.startsWith("/memes/") || url.pathname.startsWith("/videos/") || url.pathname.startsWith("/icons/")) {
     event.respondWith(
       caches.match(event.request).then((hit) =>
         hit ?? fetch(event.request).then((res) => {
