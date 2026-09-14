@@ -52,13 +52,27 @@ function hashId(id: string): number {
 }
 
 /** Barely-there hand-drawn screen edge: one thin, slightly imperfect line.
- * Personality comes from line quality, not decoration. */
+ * Anchored to the outer device corners and never moves with keyboard or input. */
 function ScreenFrame() {
   return (
-    <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
+    <svg
+      viewBox="0 0 100 100"
+      preserveAspectRatio="none"
+      className="pointer-events-none fixed inset-0 z-[68] h-full w-full"
+      style={{
+        height: "100dvh",
+        maxHeight: "100dvh",
+        width: "100vw",
+      }}
+      aria-hidden
+    >
       <path
         d="M4.2 3.4 C 3 2.2, 5.2 1.4, 8 1.3 L 92.5 1.1 C 95.8 1.1, 97.6 2.4, 97.7 4.8 L 98 94.6 C 98.1 96.8, 96.4 98.2, 93.2 98.3 L 6.8 98.6 C 4.2 98.7, 2.4 97.3, 2.3 94.9 L 2 5.4 C 1.9 4.4, 3 3.5, 4.2 3.4 Z"
-        fill="none" stroke="rgba(124,77,255,0.30)" strokeWidth="1.4" strokeLinecap="round" vectorEffect="non-scaling-stroke"
+        fill="none"
+        stroke="rgba(124,77,255,0.30)"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        vectorEffect="non-scaling-stroke"
       />
     </svg>
   );
@@ -966,19 +980,20 @@ export default function ChatPage() {
   const reactMine = reactTo ? detail?.messages.find((x) => x.id === reactTo.msgId)?.sender_id === user?.id : false;
 
   return (
-    <div
-      ref={screenRef}
-      className="chat-screen font-display fixed inset-x-0 z-[65] bg-[#0b0b0b] text-white flex flex-col overflow-hidden"
-      style={{
-        top: "var(--chat-top, 0px)",
-        height: "var(--chat-vh, 100dvh)",
-        maxHeight: "var(--chat-vh, 100dvh)",
-        paddingTop: "env(safe-area-inset-top, 0px)",
-        overscrollBehavior: "none",
-      }}
-    >
+    <>
       <ScreenFrame />
-      {clickShield && <div className="absolute inset-0 z-[80]" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} />}
+      <div
+        ref={screenRef}
+        className="chat-screen font-display fixed inset-x-0 z-[65] bg-[#0b0b0b] text-white flex flex-col overflow-hidden"
+        style={{
+          top: "var(--chat-top, 0px)",
+          height: "var(--chat-vh, 100dvh)",
+          maxHeight: "var(--chat-vh, 100dvh)",
+          paddingTop: "env(safe-area-inset-top, 0px)",
+          overscrollBehavior: "none",
+        }}
+      >
+        {clickShield && <div className="absolute inset-0 z-[80]" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} />}
 
       {/* header - stays fixed at top */}
       <header className="relative z-10 flex shrink-0 items-center gap-2.5 px-4 pt-3 pb-2">
@@ -1320,6 +1335,7 @@ export default function ChatPage() {
         .chat-screen .sheet:has(.sticker-sheet-body) .sheet-grab { background: rgba(200, 255, 61, 0.5); }
       `}</style>
     </div>
+    </>
   );
 }
 

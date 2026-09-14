@@ -375,20 +375,28 @@ body {
 .neo-btn.icon { padding: 8px; border-radius: 999px; width: 36px; height: 36px; }
 
 /* ---------- THE POST button (signature floating action) ---------- */
-.post-fab {
+.post-fab-wrap {
   position: fixed;
   right: max(16px, var(--safe-right));
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 130px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 118px);
   z-index: 45;
-  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  height: 54px; padding: 0 24px;
-  font-family: var(--font-display); font-weight: 800; font-size: 15.5px;
+  touch-action: none;
+  display: inline-flex;
+}
+@media (min-width: 1024px) {
+  .post-fab-wrap { bottom: 26px; }
+}
+
+.post-fab {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 42px; padding: 0 17px;
+  font-family: var(--font-display); font-weight: 800; font-size: 13.5px;
   letter-spacing: 0.04em; color: #0a0a0a;
   background: var(--lime);
   border: 2px solid #0a0a0a;
   border-radius: 999px;
   cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
-  box-shadow: 3.5px 3.5px 0 var(--purple);
+  box-shadow: 2.5px 2.5px 0 var(--purple);
   transform: rotate(-1.5deg);
   transition: transform 0.14s cubic-bezier(0.3, 1.4, 0.5, 1), box-shadow 0.14s ease, opacity 0.2s ease;
   animation: postFabIn 0.5s cubic-bezier(0.25, 1.6, 0.45, 1) both;
@@ -398,10 +406,10 @@ body {
   100% { transform: scale(1) rotate(-1.5deg); opacity: 1; }
 }
 .post-fab:hover {
-  transform: rotate(-2.5deg) translateY(-3px);
-  box-shadow: 5.5px 6px 0 var(--purple);
+  transform: rotate(-2.5deg) translateY(-2px);
+  box-shadow: 4px 4px 0 var(--purple);
 }
-.post-fab:active {
+.post-fab:active, .post-fab.holding {
   transform: rotate(-1deg) translateY(1px) scale(0.97);
   box-shadow: 1.5px 1.5px 0 var(--purple);
   transition-duration: 0.06s;
@@ -411,7 +419,7 @@ body {
 }
 /* hand-drawn scribble under the label — hidden until hover/focus */
 .post-fab-scribble {
-  position: absolute; left: 18%; right: 18%; bottom: -9px; height: 8px; width: 64%;
+  position: absolute; left: 18%; right: 18%; bottom: -7px; height: 6px; width: 64%;
   stroke-dasharray: 90; stroke-dashoffset: 90;
   pointer-events: none;
 }
@@ -422,8 +430,61 @@ body {
 /* gentle shrink while the feed is being flung — never hidden for long */
 .post-fab-shrunk { transform: rotate(-1deg) scale(0.88); opacity: 0.8; }
 .post-fab-shrunk:hover { transform: rotate(-2.5deg) scale(0.88); }
-@media (min-width: 1024px) {
-  .post-fab { bottom: 28px; }
+
+/* ---------- post fab orbital fan-out options ---------- */
+.post-orbital-item {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #0a0a0a;
+  box-shadow: 2px 2px 0 rgba(10, 10, 10, 0.85);
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.16s ease;
+  animation: orbitalPopIn 0.24s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes orbitalPopIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.25);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.post-orbital-item.active {
+  transform: scale(1.24);
+  box-shadow: 0 0 16px rgba(200, 255, 61, 0.65), 3px 3px 0 #0a0a0a;
+  z-index: 20;
+}
+.post-orbital-badge {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 7px;
+  background: #0a0a0a;
+  border: 1.5px solid var(--lime);
+  border-radius: 6px;
+  color: var(--lime);
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 1.5px 1.5px 0 rgba(10, 10, 10, 0.9);
+  animation: badgePop 0.14s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes badgePop {
+  0% { opacity: 0; transform: translateX(-50%) translateY(4px) scale(0.8); }
+  100% { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
 }
 
 /* ---------- create-type rows (what are we posting? sheet) ---------- */

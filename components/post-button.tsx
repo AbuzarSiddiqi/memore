@@ -18,10 +18,22 @@ const CATEGORIES = ["college", "gaming", "anime", "football", "programming", "bo
 // routes where the floating button would fight fullscreen UIs of their own
 const HIDDEN_PREFIXES = ["/reels", "/messages", "/create", "/admin", "/onboarding", "/settings", "/battles"];
 
-export function PostButton() {
+export function PostButton({ remixId, remixCategory }: { remixId?: string | null; remixCategory?: string } = {}) {
   const pathname = usePathname();
+  const router = useRouter();
   const [createOpen, setCreateOpen] = useState(false);
   const [textOpen, setTextOpen] = useState(false);
+  const [orbitalOpen, setOrbitalOpen] = useState(false);
+  const [activeOption, setActiveOption] = useState<"image" | "video" | "text" | null>(null);
+
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isHolding = useRef(false);
+  const holdFired = useRef(false);
+  const didGlide = useRef(false);
+  const startPos = useRef<{ x: number; y: number } | null>(null);
+  const activeOptionRef = useRef<"image" | "video" | "text" | null>(null);
+
   // subtle shrink while the feed is being flung — never a long hide (spec 22)
   const [flinging, setFlinging] = useState(false);
   const flingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -51,23 +63,230 @@ export function PostButton() {
     };
   }, []);
 
+  const clearHoldTimer = useCallback(() => {
+    if (holdTimer.current) {
+      clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
+  }, []);
+
+  const selectOption = useCallback((kind: "image" | "video" | "text") => {
+    setOrbitalOpen(false);
+    setActiveOption(null);
+    activeOptionRef.current = null;
+    isHolding.current = false;
+    try { navigator.vibrate?.(18); } catch {}
+    if (kind === "text") {
+      setTextOpen(true);
+    } else {
+      router.push(`/create?mode=${kind}`);
+    }
+  }, [router]);
+
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    clearHoldTimer();
+    isHolding.current = false;
+    didGlide.current = false;
+    startPos.current = { x: e.clientX, y: e.clientY };
+    activeOptionRef.current = null;
+    setActiveOption(null);
+
+    const target = e.currentTarget as HTMLElement;
+    const pointerId = e.pointerId;
+
+    holdTimer.current = setTimeout(() => {
+      isHolding.current = true;
+      holdFired.current = true;
+      setOrbitalOpen(true);
+      try { navigator.vibrate?.(15); } catch {}
+      try {
+        target.setPointerCapture(pointerId);
+      } catch {}
+    }, 220);
+  }, [clearHoldTimer]);
+
+  const onPointerMove = useCallback((e: React.PointerEvent) => {
+    if (!startPos.current) return;
+
+    if (!isHolding.current) {
+      const dist = Math.hypot(e.clientX - startPos.current.x, e.clientY - startPos.current.y);
+      if (dist > 10) {
+        clearHoldTimer();
+      }
+      return;
+    }
+
+    const distFromStart = Math.hypot(e.clientX - startPos.current.x, e.clientY - startPos.current.y);
+    if (distFromStart > 12) {
+      didGlide.current = true;
+    }
+
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const rect = wrap.getBoundingClientRect();
+
+    const dText = Math.hypot(e.clientX - (rect.left - 32), e.clientY - (rect.top + 21));
+    const dVideo = Math.hypot(e.clientX - (rect.left - 18), e.clientY - (rect.top - 22));
+    const dImage = Math.hypot(e.clientX - (rect.left + 32), e.clientY - (rect.top - 34));
+
+    const hitRadius = 42;
+    let closest: "image" | "video" | "text" | null = null;
+    let minD = Infinity;
+
+    if (dText < minD && dText <= hitRadius) { minD = dText; closest = "text"; }
+    if (dVideo < minD && dVideo <= hitRadius) { minD = dVideo; closest = "video"; }
+    if (dImage < minD && dImage <= hitRadius) { minD = dImage; closest = "image"; }
+
+    if (closest !== activeOptionRef.current) {
+      if (closest !== null) {
+        try { navigator.vibrate?.(8); } catch {}
+      }
+      activeOptionRef.current = closest;
+      setActiveOption(closest);
+    }
+  }, [clearHoldTimer]);
+
+  const onPointerUp = useCallback((e: React.PointerEvent) => {
+    clearHoldTimer();
+    try {
+      if ((e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      }
+    } catch {}
+
+    if (!isHolding.current) {
+      holdFired.current = false;
+      setCreateOpen(true);
+      return;
+    }
+
+    if (activeOptionRef.current) {
+      selectOption(activeOptionRef.current);
+    } else if (didGlide.current) {
+      setOrbitalOpen(false);
+      setActiveOption(null);
+      isHolding.current = false;
+    }
+  }, [clearHoldTimer, selectOption]);
+
+  const onPointerCancel = useCallback(() => {
+    clearHoldTimer();
+    setOrbitalOpen(false);
+    setActiveOption(null);
+    activeOptionRef.current = null;
+    isHolding.current = false;
+  }, [clearHoldTimer]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && orbitalOpen) {
+        setOrbitalOpen(false);
+        setActiveOption(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [orbitalOpen]);
+
   if (HIDDEN_PREFIXES.some((p) => pathname.startsWith(p))) return null;
 
   return (
     <>
-      <button
-        type="button"
-        className={`post-fab ${flinging ? "post-fab-shrunk" : ""}`}
-        aria-label="Create post"
-        onClick={() => setCreateOpen(true)}
-      >
-        <Spark size={17} color="#0a0a0a" />
-        <span className="post-fab-label">POST</span>
-        {/* hand-drawn underline — draws itself in on hover/focus */}
-        <svg className="post-fab-scribble" viewBox="0 0 64 10" aria-hidden preserveAspectRatio="none">
-          <path d="M2 7 C 12 3, 22 8.5, 32 5.5 S 52 3, 62 6.5" fill="none" stroke="#7C4DFF" strokeWidth="3" strokeLinecap="round" />
-        </svg>
-      </button>
+      {orbitalOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/25 backdrop-blur-[1px] transition-opacity"
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            setOrbitalOpen(false);
+            setActiveOption(null);
+          }}
+        />
+      )}
+      <div ref={wrapRef} className="post-fab-wrap">
+        <button
+          type="button"
+          className={`post-fab ${flinging ? "post-fab-shrunk" : ""} ${orbitalOpen ? "holding" : ""}`}
+          aria-label="Create post"
+          aria-haspopup="menu"
+          aria-expanded={orbitalOpen}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerCancel}
+          onClick={() => {
+            if (holdFired.current) {
+              holdFired.current = false;
+              return;
+            }
+            setCreateOpen(true);
+          }}
+        >
+          <Spark size={14} color="#0a0a0a" />
+          <span className="post-fab-label">POST</span>
+          {/* hand-drawn underline — draws itself in on hover/focus */}
+          <svg className="post-fab-scribble" viewBox="0 0 64 10" aria-hidden preserveAspectRatio="none">
+            <path d="M2 7 C 12 3, 22 8.5, 32 5.5 S 52 3, 62 6.5" fill="none" stroke="#7C4DFF" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+        </button>
+
+        {/* 3 Orbital Options around the pill */}
+        {orbitalOpen && (
+          <>
+            {/* Option 1: Text */}
+            <div
+              className={`post-orbital-item ${activeOption === "text" ? "active" : ""}`}
+              style={{
+                left: "-52px",
+                top: "1px",
+                background: "#FFD43D",
+                color: "#0a0a0a",
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => selectOption("text")}
+            >
+              <span className="font-display font-extrabold text-[15px]">Aa</span>
+              {activeOption === "text" && <span className="post-orbital-badge">TEXT</span>}
+            </div>
+
+            {/* Option 2: Video */}
+            <div
+              className={`post-orbital-item ${activeOption === "video" ? "active" : ""}`}
+              style={{
+                left: "-38px",
+                top: "-42px",
+                background: "#7C4DFF",
+                color: "#ffffff",
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => selectOption("video")}
+            >
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <rect x="2.5" y="5" width="14" height="14" rx="3" /><path d="M16.5 10.5 L21.5 7.5 V16.5 L16.5 13.5 Z" />
+              </svg>
+              {activeOption === "video" && <span className="post-orbital-badge">VIDEO</span>}
+            </div>
+
+            {/* Option 3: Image */}
+            <div
+              className={`post-orbital-item ${activeOption === "image" ? "active" : ""}`}
+              style={{
+                left: "12px",
+                top: "-54px",
+                background: "#C8FF3D",
+                color: "#0a0a0a",
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => selectOption("image")}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="9" cy="10" r="1.8" /><path d="M4 18l5-5 4 4 3-3 4 4" />
+              </svg>
+              {activeOption === "image" && <span className="post-orbital-badge">IMAGE</span>}
+            </div>
+          </>
+        )}
+      </div>
       <CreateSheet
         open={createOpen}
         onClose={() => setCreateOpen(false)}
