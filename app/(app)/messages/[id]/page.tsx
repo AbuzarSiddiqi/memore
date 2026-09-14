@@ -407,50 +407,66 @@ export default function ChatPage() {
     if (!el) return;
 
     if (typeof window !== "undefined") {
-      initialScreenHeightRef.current = Math.max(
-        window.innerHeight,
-        window.screen?.height || 0
-      );
+      initialScreenHeightRef.current = window.innerHeight;
     }
 
     const syncViewport = () => {
       const vv = window.visualViewport;
-      const screenH = initialScreenHeightRef.current > 0
-        ? initialScreenHeightRef.current
-        : (typeof window !== "undefined" ? Math.max(window.innerHeight, window.screen?.height || 0) : 844);
+      const currentWinH = typeof window !== "undefined" ? window.innerHeight : 844;
+      const baseH = initialScreenHeightRef.current > 0 ? initialScreenHeightRef.current : currentWinH;
 
       if (!vv) {
-        el.style.setProperty("--chat-vh", "100dvh");
+        el.style.setProperty("--chat-vh", "100%");
         el.style.setProperty("--chat-top", "0px");
         el.style.setProperty("--chat-bottom-padding", "env(safe-area-inset-bottom, 0px)");
         if (frameRef.current) {
-          frameRef.current.style.top = "4px";
-          frameRef.current.style.height = `${screenH - 8}px`;
+          const sat = Math.max(10, (parseFloat(getComputedStyle(el).paddingTop) || 24) - 4);
+          frameRef.current.style.top = `${sat}px`;
+          frameRef.current.style.height = `${currentWinH - sat - 6}px`;
         }
         return;
       }
+
       const h = vv.height;
       const top = vv.offsetTop;
-      el.style.setProperty("--chat-vh", `${h}px`);
-      el.style.setProperty("--chat-top", `${top}px`);
 
-      // Keyboard is open if visual viewport height is significantly smaller than physical screen height
-      const isKeyboardOpen = screenH - h > 100;
-      el.style.setProperty(
-        "--chat-bottom-padding",
-        isKeyboardOpen ? "0px" : "env(safe-area-inset-bottom, 0px)"
-      );
+      // Keyboard detection:
+      // Mobile keyboards are always > 150px tall.
+      // We compare against base window height when keyboard was closed (not hardware screen height).
+      const activeEl = typeof document !== "undefined" ? document.activeElement : null;
+      const isInputActive = activeEl?.tagName === "INPUT" || activeEl?.tagName === "TEXTAREA";
+      const heightDiff = baseH - h;
+      const isKeyboardOpen = heightDiff > 140 || (isInputActive && heightDiff > 60);
 
-      // Only update physical screen height if user rotated/resized while keyboard is NOT open
-      if (!isKeyboardOpen && window.innerHeight > 400) {
-        initialScreenHeightRef.current = Math.max(window.innerHeight, window.screen?.height || 0);
-      }
+      if (!isKeyboardOpen) {
+        // Keyboard is CLOSED:
+        if (currentWinH > 400) {
+          initialScreenHeightRef.current = currentWinH;
+        }
 
-      // The purple screen frame is the physical device outline:
-      // It remains fixed to the outer glass corners and NEVER shrinks with the keyboard!
-      if (frameRef.current) {
-        frameRef.current.style.top = `${top + 4}px`;
-        frameRef.current.style.height = `${screenH - 8}px`;
+        // Full screen height down to the absolute bottom:
+        el.style.setProperty("--chat-vh", "100%");
+        el.style.setProperty("--chat-top", "0px");
+        el.style.setProperty("--chat-bottom-padding", "env(safe-area-inset-bottom, 0px)");
+
+        // Frame sits below status bar and reaches exactly 6px from the bottom corners:
+        if (frameRef.current) {
+          const sat = Math.max(10, (parseFloat(getComputedStyle(el).paddingTop) || 24) - 4);
+          frameRef.current.style.top = `${sat}px`;
+          frameRef.current.style.height = `${(initialScreenHeightRef.current || currentWinH) - sat - 6}px`;
+        }
+      } else {
+        // Keyboard is OPEN:
+        el.style.setProperty("--chat-vh", `${h}px`);
+        el.style.setProperty("--chat-top", `${top}px`);
+        el.style.setProperty("--chat-bottom-padding", "0px");
+
+        // Frame stays fixed at the bottom corners — NEVER shrinks or moves up with keyboard!
+        if (frameRef.current) {
+          const sat = Math.max(10, (parseFloat(getComputedStyle(el).paddingTop) || 24) - 4);
+          frameRef.current.style.top = `${top + sat}px`;
+          frameRef.current.style.height = `${(initialScreenHeightRef.current || currentWinH) - sat - 6}px`;
+        }
       }
 
       // Keep newest messages visible only if user was already at the bottom
@@ -465,11 +481,16 @@ export default function ChatPage() {
     if (vv) {
       vv.addEventListener("resize", syncViewport);
       vv.addEventListener("scroll", syncViewport);
-      return () => {
+    }
+    window.addEventListener("resize", syncViewport);
+
+    return () => {
+      if (vv) {
         vv.removeEventListener("resize", syncViewport);
         vv.removeEventListener("scroll", syncViewport);
-      };
-    }
+      }
+      window.removeEventListener("resize", syncViewport);
+    };
   }, []);
 
   // 3. Track whether user is near bottom of conversation
@@ -1002,16 +1023,17 @@ export default function ChatPage() {
         className="chat-screen font-display fixed inset-x-0 z-[65] bg-[#0b0b0b] text-white flex flex-col overflow-hidden"
         style={{
           top: "var(--chat-top, 0px)",
-          height: "var(--chat-vh, 100dvh)",
-          maxHeight: "var(--chat-vh, 100dvh)",
-          paddingTop: "env(safe-area-inset-top, 0px)",
+          bottom: "0px",
+          height: "var(--chat-vh, 100%)",
+          maxHeight: "var(--chat-vh, 100%)",
+          paddingTop: "max(12px, env(safe-area-inset-top, 24px))",
           overscrollBehavior: "none",
         }}
       >
         {clickShield && <div className="absolute inset-0 z-[80]" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} />}
 
       {/* header - stays fixed at top */}
-      <header className="relative z-10 flex shrink-0 items-center gap-2.5 px-4 pt-3 pb-2">
+      <header className="relative z-10 flex shrink-0 items-center gap-2.5 px-4 pt-1.5 pb-2">
         <button onClick={() => router.push("/messages")} aria-label="Back to Messages" className="shrink-0 text-white transition-transform active:scale-90">
           <Icon name="arrow-left" size={21} strokeWidth={2.4} />
         </button>

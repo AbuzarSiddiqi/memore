@@ -92,21 +92,21 @@
   left: 0;
   right: 0;
   top: var(--chat-top, 0px);
-  height: var(--chat-vh, 100dvh);
-  max-height: var(--chat-vh, 100dvh);
+  bottom: 0;
+  height: var(--chat-vh, 100%);
+  max-height: var(--chat-vh, 100%);
   overscroll-behavior: none;
 }
 
-/* Chat Screen Frame: stays anchored to device corners touching the outer edge */
+/* Chat Screen Frame: sits in the app below the status bar, reaches the bottom corners */
 .chat-screen-frame {
   position: fixed;
-  left: 4px;
-  right: 4px;
-  top: 4px;
-  height: calc(100lvh - 8px);
-  height: calc(100vh - 8px);
+  left: 5px;
+  right: 5px;
+  top: max(8px, env(safe-area-inset-top, 16px));
+  height: calc(100% - max(8px, env(safe-area-inset-top, 16px)) - 6px);
   border: 1.5px solid rgba(124, 77, 255, 0.42);
-  border-radius: min(44px, max(14px, env(safe-area-inset-top, 44px)));
+  border-radius: 26px;
   pointer-events: none;
   z-index: 68;
 }
