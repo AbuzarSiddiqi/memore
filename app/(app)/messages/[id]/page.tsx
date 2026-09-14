@@ -225,7 +225,7 @@ export default function ChatPage() {
   const screenRef = useRef<HTMLDivElement | null>(null);
   const debugRef = useRef<HTMLDivElement | null>(null);
   const debugOn = typeof window !== "undefined" && window.location.search.includes("chatdebug");
-  const vvMaxRef = useRef(0); // tallest the visual viewport has been while idle — the keyboard signal
+  const baseRef = useRef(0); // true full-screen height, measured while idle (iOS 26 PWA lies about it)
   const [animatingMsgIds, setAnimatingMsgIds] = useState<Record<string, "zuup" | "receive" | "unsend" | "sticker">>({});
   const [doubleTapBurst, setDoubleTapBurst] = useState<{ msgId: string; x: number; y: number } | null>(null);
   const isNearBottomRef = useRef(true);
@@ -397,29 +397,41 @@ export default function ChatPage() {
     };
   }, []);
 
-  // 2. Keyboard handling — reads SIZE from whichever signal the platform gives.
-  // iOS 26 keyboards are a pure overlay: neither innerHeight nor vv.height
-  // shrinks, and iOS "reveals" the focused input by pushing the ENTIRE page up
-  // by the keyboard height (fixed elements ride that push — the header slid
-  // under the status bar). On those platforms the push itself is the keyboard
-  // signal: pan = vv.offsetTop + pageYOffset. On Android / older iOS the
-  // viewport resizes instead and the keyboard height is innerHeight − vv.height
-  // with no push. One formula covers both families:
-  //     keyboard = max(push, innerHeight − vv.height)
-  // and the root is placed at top = push with height = innerHeight − keyboard.
-  // The push compensation is tracked CONTINUOUSLY (rAF loop while focused or
-  // while the OS is still animating), so iOS's elastic pan can never leave a
-  // stale offset behind — event-driven tracking is what bounced before. When
-  // the keyboard closes and iOS releases the push, the root settles back to
-  // full height in lockstep with it. Observable result on every device: the
-  // header stays at the top of the screen, the composer sits on the keyboard
-  // edge, zero gap, no glide.
+  // 2. Keyboard handling — the signals iOS gives are LIES until sanitised.
+  // Measured on iOS 26 (iPhone 13 Pro PWA): the keyboard is a pure overlay,
+  // iOS pushes the whole page up by the keyboard height (fixed elements ride
+  // it), AND visualViewport.height reports garbage — a smaller resting value
+  // than the screen (home-area inset) and near-zero transients while the
+  // keyboard animates in. Trusting those numbers shrank the chat at rest
+  // (bottom gap) and collapsed it to nothing on focus ("everything vanish").
+  // So every signal is gated:
+  //   push         = vv.offsetTop + pageYOffset — iOS's reveal push (real).
+  //   rawShrink    = innerHeight − vv.height — only trusted when it is within
+  //                  [150px, 70% of the screen]: a real keyboard. Anything
+  //                  else is a quirk/transient and is discarded.
+  //   keyboard     = max(push, trustedShrink, base − innerHeight) — the last
+  //                  term covers platforms where innerHeight itself resizes.
+  //   base         = the true full-screen height, measured while IDLE (never
+  //                  during a keyboard animation); in the installed PWA the
+  //                  app owns the whole screen, so a shrunken innerHeight is
+  //                  corrected with screen.height. Cached in a ref so Android
+  //                  (where innerHeight legitimately resizes) is unaffected.
+  // The root is placed at top = push (cancelling iOS's push in layout coords)
+  // with height = base − keyboard, tracked in a CONTINUOUS rAF loop while the
+  // keyboard may be animating, so neither stale events nor garbage frames can
+  // displace it. Net result on every device: the header stays at the top of
+  // the screen, the composer sits exactly on the keyboard edge, the chat
+  // reaches the bottom of the screen, and no transient ever collapses it.
   useEffect(() => {
     const el = screenRef.current;
     if (!el) return;
 
     const isEditable = (n: Element | null) =>
       !!n && (n.tagName === "INPUT" || n.tagName === "TEXTAREA" || (n as HTMLElement).isContentEditable);
+
+    const isStandalone =
+      (navigator as Navigator & { standalone?: boolean }).standalone === true ||
+      (typeof window.matchMedia === "function" && window.matchMedia("(display-mode: standalone)").matches);
 
     let rafId = 0;
     let running = false;
@@ -430,24 +442,27 @@ export default function ChatPage() {
     const syncViewport = () => {
       const vv = window.visualViewport;
       const ivh = window.innerHeight;
+      const screenH = typeof window.screen !== "undefined" ? window.screen.height || 0 : 0;
       const push = (vv?.offsetTop ?? 0) + (window.pageYOffset ?? 0);
-      const vvShrink = Math.max(0, ivh - (vv?.height ?? ivh));
-      const keyboard = Math.max(push, vvShrink);
-      const rootH = Math.max(0, ivh - keyboard);
+      const rawShrink = Math.max(0, ivh - (vv?.height ?? ivh));
+      const trustedShrink = rawShrink >= 150 && rawShrink <= ivh * 0.7 ? rawShrink : 0;
+      const keyboard = Math.max(push, trustedShrink, baseRef.current - ivh);
+
+      // The true full-screen height, measured only while idle (keyboard=0):
+      // in the installed PWA the app owns the entire screen even when iOS
+      // reports a smaller innerHeight; in the browser innerHeight is truth.
+      if (keyboard === 0 && Math.abs(push) < 20) {
+        baseRef.current = isStandalone && screenH > ivh ? screenH : ivh;
+      }
+      const base = baseRef.current || ivh;
+      const rootH = Math.max(0, base - keyboard);
 
       const top = `${push}px`;
       const h = `${rootH}px`;
       if (top !== lastTop) { el.style.setProperty("--chat-top", top); lastTop = top; }
       if (h !== lastH) { el.style.setProperty("--chat-h", h); lastH = h; }
 
-      // Keyboard-open state for the composer's safe-area padding. On
-      // resize-platforms the visual viewport shrinks; on overlay platforms
-      // (iOS 26) the push is the only signal.
-      const vvh = vv?.height ?? ivh;
-      if (!isEditable(document.activeElement) || vvh > vvMaxRef.current) {
-        vvMaxRef.current = vvh;
-      }
-      const keyboardOpen = vvh < vvMaxRef.current - 40 || (isEditable(document.activeElement) && push > 60);
+      const keyboardOpen = keyboard >= 150 || (isEditable(document.activeElement) && push > 60);
       const pad = keyboardOpen ? "0px" : "env(safe-area-inset-bottom, 0px)";
       if (pad !== lastPad) { el.style.setProperty("--chat-bottom-padding", pad); lastPad = pad; }
 
@@ -458,8 +473,8 @@ export default function ChatPage() {
 
       if (debugRef.current) {
         debugRef.current.textContent =
-          `ivh=${ivh} vv=${vv?.height ?? "?"} off=${vv?.offsetTop ?? "?"} scroll=${window.pageYOffset ?? 0}\n` +
-          `push=${push} shrink=${vvShrink} kb=${keyboard} root=${rootH}`;
+          `ivh=${ivh} vv=${vv?.height ?? "?"} off=${vv?.offsetTop ?? "?"} scr=${window.pageYOffset ?? 0} screenH=${screenH}\n` +
+          `push=${push} rawShrink=${rawShrink} kb=${keyboard} base=${base} root=${rootH}`;
       }
     };
 
@@ -470,7 +485,7 @@ export default function ChatPage() {
       const shrunk = Math.max(0, window.innerHeight - (vv?.height ?? window.innerHeight));
       const focused = isEditable(document.activeElement);
       if (focused || Math.abs(push) > 1 || shrunk > 1) {
-        rafId = requestAnimationFrame(tick); // keep 1:1 with the OS keyboard/pan animation
+        rafId = requestAnimationFrame(tick); // keep 1:1 with the OS keyboard/push animation
       } else {
         running = false;
       }
@@ -480,6 +495,11 @@ export default function ChatPage() {
       if (!running) { running = true; rafId = requestAnimationFrame(tick); }
     };
 
+    // Prime the base height before first paint of the layout.
+    baseRef.current = (() => {
+      const screenH = typeof window.screen !== "undefined" ? window.screen.height || 0 : 0;
+      return isStandalone && screenH > window.innerHeight ? screenH : window.innerHeight;
+    })();
     syncViewport();
     const vv = window.visualViewport;
     vv?.addEventListener("resize", kick);
