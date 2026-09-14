@@ -409,37 +409,48 @@ export default function ChatPage() {
     const isEditable = (n: Element | null) =>
       !!n && (n.tagName === "INPUT" || n.tagName === "TEXTAREA" || (n as HTMLElement).isContentEditable);
 
+    let rafId = 0;
     const syncViewport = () => {
-      const vv = window.visualViewport;
-      if (!vv) {
-        el.style.setProperty("--chat-bottom", "0px");
-        return;
-      }
+      // RAF-debounce: coalesce rapid visual-viewport events (keyboard animation
+      // on iOS fires many times per frame) into a single style update per frame.
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        const vv = window.visualViewport;
+        if (!vv) {
+          el.style.setProperty("--chat-bottom", "0px");
+          return;
+        }
 
-      const overlap = Math.max(0, window.innerHeight - vv.height);
-      el.style.setProperty("--chat-bottom", `${overlap}px`);
+        // overlap = how much of the layout viewport the keyboard covers.
+        // On platforms where interactiveWidget:resizes-content works (Android,
+        // iOS 16.4+) innerHeight shrinks with the keyboard so this is always 0
+        // and CSS alone handles the layout. On older iOS innerHeight stays full
+        // so the overlap equals the keyboard height.
+        const overlap = Math.max(0, window.innerHeight - vv.height);
+        el.style.setProperty("--chat-bottom", `${overlap}px`);
 
-      // The visual viewport shrinking against its tallest idle height is the
-      // one keyboard signal that is correct on every platform (innerHeight
-      // alone lies on older iOS; base-height snapshots lie on resizes-content).
-      if (!isEditable(document.activeElement) || vv.height > vvMaxRef.current) {
-        vvMaxRef.current = vv.height;
-      }
-      const keyboardOpen = vv.height < vvMaxRef.current - 40;
-      el.style.setProperty(
-        "--chat-bottom-padding",
-        keyboardOpen ? "0px" : "env(safe-area-inset-bottom, 0px)"
-      );
+        // Track the tallest idle visual viewport height as the keyboard-closed
+        // baseline — never let it decrease while an editable is focused.
+        if (!isEditable(document.activeElement) || vv.height > vvMaxRef.current) {
+          vvMaxRef.current = vv.height;
+        }
+        const keyboardOpen = vv.height < vvMaxRef.current - 40;
+        el.style.setProperty(
+          "--chat-bottom-padding",
+          keyboardOpen ? "0px" : "env(safe-area-inset-bottom, 0px)"
+        );
 
-      // iOS force-pans the window to reveal a focused input even when the
-      // layout above already keeps it visible; undo that pan so the header
-      // stays put. (The body is locked — no legitimate window scroll exists.)
-      if (window.scrollY !== 0) window.scrollTo(0, 0);
+        // NOTE: We intentionally do NOT call window.scrollTo(0,0) here.
+        // The body is position:fixed so there is no real layout-viewport scroll.
+        // iOS animates the visualViewport (vv.offsetTop) when focusing an input;
+        // calling scrollTo() during that animation creates a feedback loop that
+        // causes the entire UI to bounce (the "fluctuation" bug on iPhone).
 
-      // Keep newest messages visible only if user was already at the bottom
-      if (isNearBottomRef.current && listRef.current) {
-        listRef.current.scrollTop = listRef.current.scrollHeight;
-      }
+        // Keep newest messages visible only if user was already at the bottom
+        if (isNearBottomRef.current && listRef.current) {
+          listRef.current.scrollTop = listRef.current.scrollHeight;
+        }
+      });
     };
 
     syncViewport();
@@ -447,14 +458,16 @@ export default function ChatPage() {
     const vv = window.visualViewport;
     if (vv) {
       vv.addEventListener("resize", syncViewport);
-      vv.addEventListener("scroll", syncViewport);
+      // Do NOT listen to vv "scroll" — that fires when iOS pans the visual
+      // viewport to center a focused input. We don't need to react to it,
+      // and doing so was the second source of the fluctuation feedback loop.
     }
     window.addEventListener("resize", syncViewport);
 
     return () => {
+      cancelAnimationFrame(rafId);
       if (vv) {
         vv.removeEventListener("resize", syncViewport);
-        vv.removeEventListener("scroll", syncViewport);
       }
       window.removeEventListener("resize", syncViewport);
     };
@@ -1254,6 +1267,13 @@ export default function ChatPage() {
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") sendText(); }}
               aria-label="Message"
+              enterKeyHint="send"
+              onFocus={(e) => {
+                // Prevent iOS from scrolling/panning the page to center this
+                // input — our layout already keeps it above the keyboard via
+                // the --chat-bottom CSS variable updated in syncViewport.
+                e.target.scrollIntoView = () => {};
+              }}
             />
           </div>
           <button
