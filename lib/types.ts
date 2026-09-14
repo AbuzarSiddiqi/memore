@@ -283,13 +283,14 @@ export interface DB {
   meta: { last_tick: number; tick_count: number; version: number };
 }
 
-// ---------- 24-hour disappearing chat ----------
+// ---------- Ephemeral chat: PERSISTENT conversations, per-message expiry ----------
 export interface ChatConversation {
   id: string;
-  participants: [string, string]; // sorted pair of user ids (1-to-1 in V1)
+  participants: [string, string]; // sorted pair of user ids (1-to-1 in V1) — PERSISTENT contact
   created_at: string;
-  expires_at: string; // server-authoritative: created_at + 24h
-  status: "active" | "expired";
+  updated_at?: string; // server timestamp of the latest activity
+  status: "active" | "expired"; // legacy field — "expired" conversations are resurrected on load
+  temp_chat?: boolean; // TEMP CHAT mode: messages purge when the chat is closed
   reads: Record<string, string>; // user_id -> last read timestamp
   muted: Record<string, boolean>; // user_id -> muted (no badge)
 }
@@ -304,7 +305,9 @@ export interface ChatMessage {
   media_url: string | null;
   sticker_id: string | null; // key into the MEMORE sticker catalog (lib/stickers.ts)
   reply_to_message_id: string | null; // quote reference — never a duplicated object
-  created_at: string;
+  created_at: string; // server timestamp
+  expires_at?: string; // server-authoritative: created_at + 24h — EACH message owns its lifetime
+  deleted_at?: string | null; // set when removed (unsend and expiration are separate events)
 }
 
 // compact quote hydrated onto a message that replies to another message
@@ -342,12 +345,11 @@ export interface ChatOtherUser {
 export interface ChatListItem {
   id: string;
   other: ChatOtherUser;
-  preview: string;
+  preview: string; // "" when the thread is empty (expired last message → "start a chat")
   preview_type: ChatMessage["type"];
-  last_at: string; // last message time
+  last_at: string; // last message time (falls back to conversation creation)
   unread: number;
-  remaining_ms: number;
-  expires_at: string;
+  temp_chat: boolean;
   muted: boolean;
 }
 
@@ -359,9 +361,9 @@ export interface ChatMessageView extends ChatMessage {
 }
 
 export interface ChatDetail {
-  conversation: { id: string; created_at: string; expires_at: string; remaining_ms: number; other_read_at?: string };
+  conversation: { id: string; created_at: string; temp_chat: boolean; other_read_at?: string };
   other: ChatOtherUser;
-  messages: ChatMessageView[];
+  messages: ChatMessageView[]; // only non-expired messages — the server is the clock
   is_delta?: boolean;
 }
 

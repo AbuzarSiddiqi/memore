@@ -7,7 +7,7 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { api, useApi, useSession, useToast } from "@/lib/client";
-import { getCachedMessages, appendCachedMessages, purgeExpiredChatLocal, getCachedChats, removeCachedMessage, updateCachedMessageReactions } from "@/lib/client-cache";
+import { getCachedMessages, appendCachedMessages, purgeConversationMessagesLocal, getCachedChats, removeCachedMessage, updateCachedMessageReactions } from "@/lib/client-cache";
 import { playSfx } from "@/lib/sfx";
 
 import type { ChatDetail, ChatMessageView, ChatReplyRef, MemeView } from "@/lib/types";
@@ -51,12 +51,8 @@ function hashId(id: string): number {
   return h;
 }
 
-/** Barely-there screen edge: one thin line that hugs the physical device corners.
- * Lives INSIDE the chat root (absolute), so it follows the visual viewport with
- * the rest of the chat and always wraps exactly the visible screen. */
-function ScreenFrame() {
-  return <div className="chat-screen-frame pointer-events-none absolute z-[68]" aria-hidden />;
-}
+/** Barely-there screen edge removed — the chat is now frameless, edge-to-edge
+ * like Instagram's chat. (ScreenFrame deleted 2026-09-15 per user.) */
 
 /** One thin, slightly imperfect purple line under the header. */
 function HeaderRule() {
@@ -67,24 +63,24 @@ function HeaderRule() {
   );
 }
 
-/** Hand-drawn clock: one icon, live countdown from the server's expires_at. */
-function HeaderClock({ expiresAt }: { expiresAt?: string }) {
-  const [, tick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => tick((n) => n + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
-  const ms = expiresAt ? Math.max(0, new Date(expiresAt).getTime() - Date.now()) : 0;
-  const h = Math.floor(ms / 3_600_000);
-  const m = Math.floor((ms % 3_600_000) / 60_000);
-  const urgent = ms > 0 && ms < 10 * 60_000;
+/** Hand-drawn ephemeral indicator — there is no conversation-wide countdown
+ * (each message owns its 24h lifetime and expires silently), so the header
+ * just states the mode. */
+function HeaderClock({ tempChat }: { tempChat: boolean }) {
   return (
-    <span className="inline-flex items-center gap-1.5 text-[13px] text-[#C8FF3D] aura-num" style={urgent ? { textShadow: "0 0 8px rgba(200,255,61,0.55)" } : undefined}>
-      <svg viewBox="0 0 24 24" width={13} height={13} aria-hidden>
-        <circle cx="12" cy="13" r="8.4" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" />
-        <path d="M12 9.4v4l2.5 1.5" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-      {h}h {String(m).padStart(2, "0")}m <span className="font-display font-bold">left</span>
+    <span className="inline-flex items-center gap-1.5 text-[13px] text-[#C8FF3D] aura-num">
+      {tempChat ? (
+        <svg viewBox="0 0 24 24" width={13} height={13} aria-hidden>
+          <path d="M13.5 3 C 9 4.5, 8.5 9, 12 11 C 8 12, 7 17, 11 19.5 C 6.5 19, 4.5 14.5, 6.5 11 C 4 8, 6 4, 9.5 3.4 C 11 3, 12.5 2.8, 13.5 3 Z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M15 9 C 19 10, 19.5 15, 15.5 17.5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" width={13} height={13} aria-hidden>
+          <circle cx="12" cy="13" r="8.4" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" />
+          <path d="M12 9.4v4l2.5 1.5" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )}
+      <span className="font-display font-bold">{tempChat ? "temporary chat" : "24h messages"}</span>
     </span>
   );
 }
@@ -224,6 +220,8 @@ export default function ChatPage() {
   const [investMeme, setInvestMeme] = useState<MemeView | null>(null);
   const [attach, setAttach] = useState(false);
   const screenRef = useRef<HTMLDivElement | null>(null);
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLDivElement | null>(null);
   const [animatingMsgIds, setAnimatingMsgIds] = useState<Record<string, "zuup" | "receive" | "unsend" | "sticker">>({});
   const [doubleTapBurst, setDoubleTapBurst] = useState<{ msgId: string; x: number; y: number } | null>(null);
   const isNearBottomRef = useRef(true);
@@ -266,8 +264,7 @@ export default function ChatPage() {
             conversation: {
               id,
               created_at: chatMeta?.last_at || new Date().toISOString(),
-              expires_at: chatMeta?.expires_at || new Date(Date.now() + 86400000).toISOString(),
-              remaining_ms: chatMeta?.remaining_ms || 86400000,
+              temp_chat: !!chatMeta?.temp_chat,
             },
             other: chatMeta?.other || { id: "", username: "", display_name: "", avatar_bg: "#222" },
             messages: cached,
@@ -287,9 +284,14 @@ export default function ChatPage() {
       if (!alive.current) return;
       setGone(null);
 
+      // drop locally-cached messages whose own expires_at has passed — the
+      // local echo of the server-authoritative expiration (the server already
+      // excludes them from this response)
+      const pruneExpired = (ms: ChatMessageView[]) => ms.filter((m) => !m.expires_at || new Date(m.expires_at).getTime() > Date.now());
+
       if (d.is_delta) {
         if (d.messages && d.messages.length > 0) {
-          const updated = await appendCachedMessages(id, d.messages, d.conversation.expires_at);
+          const updated = pruneExpired(await appendCachedMessages(id, d.messages));
           lastSyncCursorRef.current = updated[updated.length - 1].created_at;
           setDetail((prev) => {
             if (!prev) return d;
@@ -307,14 +309,18 @@ export default function ChatPage() {
             return {
               ...prev,
               conversation: { ...prev.conversation, ...d.conversation },
-              messages: prev.messages.map((m) =>
+              messages: pruneExpired(prev.messages).map((m) =>
                 m.sender_id === user?.id && otherRead >= m.created_at ? { ...m, seen: true } : m
               ),
             };
           });
+        } else {
+          // nothing new — still reap locally expired messages (per-message
+          // lifetimes mean the thread can silently shrink between polls)
+          setDetail((prev) => (prev ? { ...prev, messages: pruneExpired(prev.messages) } : prev));
         }
       } else {
-        const updated = await appendCachedMessages(id, d.messages, d.conversation.expires_at);
+        const updated = pruneExpired(await appendCachedMessages(id, d.messages));
         if (updated.length > 0) {
           lastSyncCursorRef.current = updated[updated.length - 1].created_at;
         }
@@ -325,7 +331,7 @@ export default function ChatPage() {
       const msg = (e as Error).message || "";
       if (msg === "expired" || msg.includes("disappeared") || msg.includes("Too late")) {
         setGone("expired");
-        void purgeExpiredChatLocal(id);
+        void purgeConversationMessagesLocal(id);
       }
     }
   }, [id, user?.id]);
@@ -348,26 +354,42 @@ export default function ChatPage() {
     };
   }, [load]);
 
-  // Listen for cross-tab expiration event
+  // Listen for cross-tab message-expiration sweeps: expired messages are
+  // removed from state, but the conversation/contact NEVER goes away.
   useEffect(() => {
     const onExpired = (e: any) => {
       if (e?.detail?.id === id) {
-        setGone("expired");
-        void purgeExpiredChatLocal(id);
+        setDetail((prev) => {
+          if (!prev) return prev;
+          const dead = new Set<string>(e.detail.messageIds ?? []);
+          return { ...prev, messages: prev.messages.filter((m) => !dead.has(m.id)) };
+        });
       }
     };
-    window.addEventListener("memore:chat-expired", onExpired);
-    return () => window.removeEventListener("memore:chat-expired", onExpired);
+    window.addEventListener("memore:messages-expired", onExpired);
+    return () => window.removeEventListener("memore:messages-expired", onExpired);
   }, [id]);
 
-  const remaining = detail ? Math.max(0, new Date(detail.conversation.expires_at).getTime() - Date.now()) : 0;
+  // TEMP CHAT close: leaving the chat tells the server to purge its messages.
+  // Server-authoritative; the conversation and contact always survive. The
+  // local cache is cleaned best-effort after the request.
+  const tempRef = useRef(false);
   useEffect(() => {
-    if (detail && remaining <= 0) {
-      setGone("expired");
-      const t = setTimeout(() => router.push("/messages"), 2600);
-      return () => clearTimeout(t);
-    }
-  }, [detail, remaining, router]);
+    tempRef.current = !!detail?.conversation.temp_chat;
+  }, [detail?.conversation.temp_chat]);
+  useEffect(() => {
+    const leave = () => {
+      if (!tempRef.current) return;
+      void fetch(`/api/chats/${id}/close`, { method: "POST", keepalive: true }).then(() => {
+        void purgeConversationMessagesLocal(id);
+      }).catch(() => { /* offline — the server still owns the purge decision */ });
+    };
+    window.addEventListener("pagehide", leave);
+    return () => {
+      window.removeEventListener("pagehide", leave);
+      leave();
+    };
+  }, [id]);
 
   // 1. The chat is a NORMAL scrolling page — the same architecture as every
   // website that works on an iPhone: a sticky header, messages in the page
@@ -375,6 +397,23 @@ export default function ChatPage() {
   // when the keyboard opens (exactly like a plain website), the header and
   // composer stick to the viewport, and no code fights the OS — the source of
   // every previous failure is simply gone. Only scroll bookkeeping remains.
+  // The header and composer are fixed overlays; measure their heights (they
+  // change with the safe-area, the reply bar and the temp label) and reserve
+  // matching bands on the root so no message ever hides behind them.
+  useEffect(() => {
+    const el = screenRef.current;
+    if (!el) return;
+    const apply = () => {
+      el.style.setProperty("--hdr-h", `${headerRef.current?.offsetHeight ?? 0}px`);
+      el.style.setProperty("--cmp-h", `${composerRef.current?.offsetHeight ?? 0}px`);
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    if (headerRef.current) ro.observe(headerRef.current);
+    if (composerRef.current) ro.observe(composerRef.current);
+    return () => ro.disconnect();
+  }, []);
+
   const scrollToEnd = useCallback(() => {
     window.scrollTo(0, document.documentElement.scrollHeight);
   }, []);
@@ -753,7 +792,7 @@ export default function ChatPage() {
             messages: prev.messages.map((m) => (m.id === optId ? res.message : m)),
           };
         });
-        const updated = await appendCachedMessages(id, [res.message], detail?.conversation.expires_at);
+        const updated = await appendCachedMessages(id, [res.message]);
         lastSyncCursorRef.current = res.message.created_at;
       }
       await load();
@@ -762,7 +801,7 @@ export default function ChatPage() {
       toast((e as Error).message, "err");
       if ((e as Error).message.includes("disappeared")) {
         setGone("expired");
-        void purgeExpiredChatLocal(id);
+        void purgeConversationMessagesLocal(id);
       }
     } finally {
       setBusy(false);
@@ -898,16 +937,19 @@ export default function ChatPage() {
         className="chat-screen font-display relative z-[65] bg-[#0b0b0b] text-white flex flex-col"
         style={{
           minHeight: "100dvh",
+          // reserve the bands the fixed header/composer overlay
+          paddingTop: "var(--hdr-h, 108px)",
+          paddingBottom: "var(--cmp-h, 96px)",
           // neutralise the app shell's <main> paddings — the chat owns the screen
           margin: "-8px 0 -128px",
         }}
       >
-        <ScreenFrame />
         {clickShield && <div className="absolute inset-0 z-[80]" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} />}
 
-      {/* header — sticky: stays pinned to the top of the screen while the
-          page scrolls, exactly like a plain website on the iPhone */}
-      <div className="sticky top-0 z-30 bg-[#0b0b0b]">
+      {/* header — FIXED to the top of the screen: it physically cannot move
+          while the messages scroll, exactly like Instagram's chat. Its height
+          is measured into --hdr-h so the messages flow underneath it. */}
+      <div ref={headerRef} className="fixed top-0 left-0 right-0 z-40 bg-[#0b0b0b]">
         <header className="relative z-10 flex shrink-0 items-center gap-2.5 px-4 pt-[max(12px,env(safe-area-inset-top))] pb-2">
         <button onClick={() => router.push("/messages")} aria-label="Back to Messages" className="shrink-0 text-white transition-transform active:scale-90">
           <Icon name="arrow-left" size={21} strokeWidth={2.4} />
@@ -920,11 +962,13 @@ export default function ChatPage() {
           </div>
         </div>
         <div className="flex shrink-0 flex-col items-end">
-          <HeaderClock expiresAt={detail?.conversation.expires_at} />
+          <HeaderClock tempChat={!!detail?.conversation.temp_chat} />
           <svg viewBox="0 0 100 6" preserveAspectRatio="none" className="mt-0.5 h-[4px] w-[104px]" aria-hidden>
             <path d="M2 4 C 22 1.5, 48 5.2, 68 2.8 C 80 1.6, 90 3.4, 98 2.4" fill="none" stroke="rgba(200,255,61,0.75)" strokeWidth="2" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
           </svg>
-          <span className="mt-0.5 whitespace-nowrap text-[9.5px] leading-none text-white/40">disappears in 24h</span>
+          <span className="mt-0.5 whitespace-nowrap text-[9.5px] leading-none text-white/40">
+            {detail?.conversation.temp_chat ? "purges when you leave" : "messages vanish after 24h"}
+          </span>
         </div>
         <button onClick={() => setMenu(true)} aria-label="Chat menu" className="shrink-0 py-1 pl-1 text-white/85 transition-transform active:scale-90">
           <span className="mb-1 block h-1 w-1 rounded-full bg-current" />
@@ -1098,16 +1142,32 @@ export default function ChatPage() {
             )
           )}
           {detail && detail.messages.length === 0 && (
-            <p className="py-5 text-center text-[13px] text-white/40">Say something. It&apos;ll be gone tomorrow.</p>
+            <div className="flex flex-col items-center gap-2.5 py-10 text-center">
+              <svg viewBox="0 0 24 24" width={40} height={40} aria-hidden>
+                <circle cx="12" cy="13" r="8.4" fill="none" stroke="rgba(124,77,255,0.9)" strokeWidth="1.7" strokeLinecap="round" />
+                <path d="M12 9.4v4l2.5 1.5" fill="none" stroke="#C8FF3D" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M4 4 L7.5 7.5 M20 4 L16.5 7.5" stroke="#C8FF3D" strokeWidth="1.7" strokeLinecap="round" />
+                <path d="M3.5 20.5 C 8 18.5, 16 18.5, 20.5 20.5" fill="none" stroke="rgba(124,77,255,0.55)" strokeWidth="1.5" strokeLinecap="round" strokeDasharray="2 2.5" />
+              </svg>
+              <div className="hd text-[16px] text-white">{detail.conversation.temp_chat ? "TEMP CHAT CLEANED ITSELF" : "THE MEMES HAVE DISAPPEARED"}</div>
+              <p className="max-w-[240px] text-[12px] leading-snug text-white/45">
+                {detail.conversation.temp_chat
+                  ? "You left, so the receipts burned. Say something new."
+                  : "Every message lives 24 hours after it's sent. No bags. No messages. Just vibes."}
+              </p>
+              <span className="text-[11px] font-bold tracking-widest text-[#C8FF3D]">START A CHAT ↓</span>
+            </div>
           )}
         </div>
       </div>
 
-      {/* composer — sticky: rides the bottom of the screen while the page
-          scrolls, and iOS nudges the page up behind it when the keyboard
-          opens, exactly like a plain website */}
+      {/* composer — FIXED to the bottom of the screen like the header: it
+          cannot move while messages scroll; its measured height reserves the
+          bottom band via --cmp-h. When the native keyboard opens, iOS nudges
+          the page behind it, exactly like a plain website. */}
       <div
-        className="sticky bottom-0 z-20 bg-[#0b0b0b] px-3.5 pt-2"
+        ref={composerRef}
+        className="fixed bottom-0 left-0 right-0 z-20 bg-[#0b0b0b] px-3.5 pt-2"
         style={{
           paddingBottom: kbFocused
             ? "6px"
@@ -1241,7 +1301,14 @@ export default function ChatPage() {
       )}
       {investMeme && <InvestSheet meme={investMeme} open onClose={() => setInvestMeme(null)} onDone={() => { load(); toast("Invested from the chat. Degenerate.", "ok"); }} />}
 
-      <ChatMenuSheet id={id} open={menu} onClose={() => setMenu(false)} username={detail?.other.username ?? ""} />
+      <ChatMenuSheet
+        id={id}
+        open={menu}
+        onClose={() => setMenu(false)}
+        username={detail?.other.username ?? ""}
+        tempChat={!!detail?.conversation.temp_chat}
+        onTempChange={(enabled) => setDetail((prev) => (prev ? { ...prev, conversation: { ...prev.conversation, temp_chat: enabled } } : prev))}
+      />
       <style jsx global>{`
         .chat-screen ::selection { background: rgba(124, 77, 255, 0.45); color: #fff; }
         .chat-screen input { caret-color: #fff; -webkit-tap-highlight-color: transparent; }
@@ -1374,9 +1441,30 @@ function SharedBubble({ meme, onInvest, onShare }: { meme: MemeView; onInvest: (
   );
 }
 
-function ChatMenuSheet({ id, open, onClose, username }: { id: string; open: boolean; onClose: () => void; username: string }) {
+function ChatMenuSheet({ id, open, onClose, username, tempChat, onTempChange }: {
+  id: string;
+  open: boolean;
+  onClose: () => void;
+  username: string;
+  tempChat: boolean;
+  onTempChange: (enabled: boolean) => void;
+}) {
   const toast = useToast();
   const [muted, setMuted] = useState<boolean | null>(null);
+  const [tempBusy, setTempBusy] = useState(false);
+  const toggleTemp = async () => {
+    if (tempBusy) return;
+    setTempBusy(true);
+    try {
+      const r = await api<{ temp_chat: boolean }>(`/api/chats/${id}/temp`, { json: { enabled: !tempChat } });
+      onTempChange(r.temp_chat);
+      toast(r.temp_chat ? "TEMP CHAT ON. Messages burn when you leave." : "TEMP CHAT OFF. Messages live 24h.", "ok");
+    } catch (e) {
+      toast((e as Error).message, "err");
+    } finally {
+      setTempBusy(false);
+    }
+  };
   const act = async (kind: "mute" | "block" | "report") => {
     try {
       if (kind === "mute") {
@@ -1404,6 +1492,26 @@ function ChatMenuSheet({ id, open, onClose, username }: { id: string; open: bool
   return (
     <Sheet open={open} onClose={onClose} label="Chat options">
       <div className="hd text-[20px] mb-3">Chat options</div>
+
+      {/* TEMP CHAT — conversation-level mode: messages purge when the chat closes */}
+      <button
+        className={`mb-3 flex w-full items-center gap-3 rounded-[16px] border p-3 text-left transition-transform active:scale-[0.99] ${tempChat ? "border-[#C8FF3D]/70 bg-[#141a08]" : "border-[#2a2a2a] bg-[#131313]"}`}
+        onClick={toggleTemp}
+        disabled={tempBusy}
+      >
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#7C4DFF]/70 text-[#C8FF3D]">
+          <svg viewBox="0 0 24 24" width={17} height={17} aria-hidden>
+            <path d="M13.5 3 C 9 4.5, 8.5 9, 12 11 C 8 12, 7 17, 11 19.5 C 6.5 19, 4.5 14.5, 6.5 11 C 4 8, 6 4, 9.5 3.4 C 11 3, 12.5 2.8, 13.5 3 Z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M15 9 C 19 10, 19.5 15, 15.5 17.5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          </svg>
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block font-display text-[14px] font-bold text-white">TEMP CHAT</span>
+          <span className="block text-[11px] leading-snug muted">{tempChat ? "ON — everything here burns when you leave" : "OFF — messages disappear 24h after sending"}</span>
+        </span>
+        <span className={`shrink-0 pill !text-[10px] font-bold ${tempChat ? "p-lime" : "p-black"}`}>{tempChat ? "ON" : "OFF"}</span>
+      </button>
+
       <div className="space-y-1">
         {rows.map((r) => (
           <button key={r.kind} className="neo-btn ghost w-full !justify-start" onClick={() => act(r.kind)}>

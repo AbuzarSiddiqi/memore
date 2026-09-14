@@ -1,6 +1,7 @@
 "use client";
-// MESSAGES — MEMORE's 24-hour disappearing conversations. Every chat here dies
-// 24 hours after it started; the server is the only clock that matters.
+// MESSAGES — the inbox. Conversations are persistent contacts; the
+// MESSAGES inside them are ephemeral (each one expires 24h after the server
+// created it, per-message — see lib/server/chats.ts).
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -8,7 +9,7 @@ import { api, useApi, useSession } from "@/lib/client";
 import { getCachedChats, setCachedChats, sweepExpiredChats } from "@/lib/client-cache";
 import type { ChatListItem } from "@/lib/types";
 import { Avatar, EmptyState, NeoButton, Skeleton } from "@/components/ui";
-import { ChatClock, ContactsSheet } from "@/components/chat";
+import { ContactsSheet } from "@/components/chat";
 import { Icon } from "@/components/icons";
 import { Spark } from "@/components/brand";
 
@@ -22,7 +23,6 @@ export default function MessagesPage() {
   const { data, loading, refresh } = useApi<{ chats: ChatListItem[] }>("/api/chats");
   const router = useRouter();
   const [picker, setPicker] = useState(false);
-  const [, force] = useState(0);
 
   // Instant hydration from persistent cache on mount
   useEffect(() => {
@@ -73,12 +73,6 @@ export default function MessagesPage() {
     };
   }, [refresh]);
 
-  // local clock for the remaining-time labels (server stays authoritative)
-  useEffect(() => {
-    const t = setInterval(() => force((n) => n + 1), 30_000);
-    return () => clearInterval(t);
-  }, []);
-
   const chats = data?.chats ?? cachedChats ?? [];
   const isInitialLoading = loading && chats.length === 0;
 
@@ -93,7 +87,7 @@ export default function MessagesPage() {
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <h1 className="hd text-[24px]">MESSAGES</h1>
         <span className="pill p-black !text-[10px] inline-flex items-center gap-1">
-          <Spark size={10} color="#C8FF3D" /> ALL CHATS EXPIRE IN 24H
+          <Spark size={10} color="#C8FF3D" /> MESSAGES DISAPPEAR AFTER 24H
         </span>
       </div>
 
@@ -105,8 +99,6 @@ export default function MessagesPage() {
       )}
 
       {chats.map((c) => {
-        const remaining = Math.max(0, new Date(c.expires_at).getTime() - Date.now());
-        if (remaining <= 0) return null; // server already killed it; skip the corpse
         return (
           <Link key={c.id} href={`/messages/${c.id}`} className="block mb-2.5">
             <div className={`relative rounded-[20px] p-3.5 flex items-center gap-3 bg-[#131313] border border-[#232323] ${c.unread ? "border-[#7C4DFF]" : ""}`}>
@@ -115,13 +107,24 @@ export default function MessagesPage() {
                 {c.unread > 0 && <span className="absolute -top-1 -right-1 badge-dot">{c.unread > 9 ? "9+" : c.unread}</span>}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="font-bold text-[13.5px] truncate">@{c.other.username}</div>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-bold text-[13.5px] truncate">@{c.other.username}</span>
+                  {c.temp_chat && (
+                    <span className="shrink-0 pill p-lime !text-[8px] !px-1.5 !py-0">TEMP</span>
+                  )}
+                </div>
                 <div className={`text-[12px] truncate ${c.unread ? "text-white font-medium" : "muted"}`}>
                   {c.unread > 0 && <span className="text-[#C8FF3D] mr-1">●</span>}
-                  {previewIcon(c.preview_type)}{c.preview}
+                  {c.preview ? (
+                    <>{previewIcon(c.preview_type)}{c.preview}</>
+                  ) : (
+                    <span className="italic opacity-70">start a chat</span>
+                  )}
                 </div>
                 <div className="text-[10px] muted mt-0.5 flex items-center gap-2">
-                  <ChatClock remainingMs={remaining} subtle />
+                  <span className="inline-flex items-center gap-1">
+                    <Icon name="clock" size={10} className="opacity-60" /> 24h after sending
+                  </span>
                   {c.muted && <Icon name="bell" size={11} className="opacity-60" />}
                 </div>
               </div>

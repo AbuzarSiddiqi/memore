@@ -1,8 +1,13 @@
-// Chat service — MEMORE's 24-hour disappearing conversations.
-// The server is the only clock that matters: expires_at is set here at
-// creation, every request re-checks it, and expired conversations are wiped
-// (messages + reactions + media) by an idempotent cleanup pass that runs on
-// every chat API call. Expired conversations can never be queried again.
+// Chat service — MEMORE's ephemeral messaging, three separate concepts:
+//   MESSAGE      = ephemeral. Each message gets its OWN server-set
+//                  expires_at (created_at + 24h) and is deleted individually.
+//   CONVERSATION = persistent. It represents the thread and NEVER expires.
+//   CONTACT      = persistent. The chat list is built from conversations, so
+//                  @alice stays in the list even after every message is gone.
+// The server is the only clock: it stamps created_at/expires_at, re-checks
+// them on every request, and an idempotent expiration worker deletes expired
+// MESSAGES (content + reactions + media). Conversations and participants are
+// never deleted by expiration.
 import { db, save, uid, uploadsDir, normalizeDbUuids } from "./db";
 import { userBySlug } from "./auth";
 import { memeView } from "./views";
@@ -16,7 +21,7 @@ import type {
 import fs from "fs";
 import path from "path";
 
-export const CHAT_TTL_MS = 24 * 60 * 60 * 1000;
+export const CHAT_TTL_MS = 24 * 60 * 60 * 1000; // each MESSAGE lives 24h
 const CHATS_FILE = "chats_v2.json";
 let chatHydrationPromise: Promise<void> | null = null;
 let lastChatHydrate = 0;
@@ -139,14 +144,27 @@ export async function persistChats(immediate = false): Promise<void> {
 }
 
 // Old db.json files predate the chat collections — backfill them lazily.
+// ALSO the v1→v2 model migration: conversations used to carry a conversation-
+// wide expires_at and were deleted wholesale. Under the ephemeral model the
+// conversation is persistent, so legacy "expired" conversations are
+// resurrected (the contact survives) and every message that lacks its own
+// expires_at gets one stamped from its created_at.
 export function ensureChats(d: ReturnType<typeof db>): void {
   if (!d.chats) d.chats = [];
   if (!d.chat_messages) d.chat_messages = [];
   if (!d.message_reactions) d.message_reactions = [];
-  // legacy messages predate sticker + reply fields
+  for (const c of d.chats) {
+    if (c.status === "expired") c.status = "active"; // contacts survive the old 24h wipe
+    if (c.reads === undefined) c.reads = {};
+    if (c.muted === undefined) c.muted = {};
+  }
+  // legacy messages predate sticker + reply + per-message expiry fields
   for (const m of d.chat_messages) {
     if (m.sticker_id === undefined) (m as ChatMessage).sticker_id = null;
     if (m.reply_to_message_id === undefined) (m as ChatMessage).reply_to_message_id = null;
+    if (!m.expires_at) {
+      (m as ChatMessage).expires_at = new Date(new Date(m.created_at).getTime() + CHAT_TTL_MS).toISOString();
+    }
   }
 }
 
@@ -166,25 +184,25 @@ function summarizeReactions(all: MessageReaction[], messageId: string, viewerId:
   return [...byId.values()].sort((a, b) => b.count - a.count);
 }
 
-/** Idempotent expiration pass: mark expired, delete messages + reactions + media files. */
+/** Idempotent MESSAGE expiration worker: deletes every message whose
+ * expires_at has passed (content + reactions + media files). Conversations,
+ * participants and chat-list contacts are NEVER touched — a thread whose
+ * messages have all expired simply shows the empty state and remains in the
+ * chat list. Runs on every chat API call. */
 export function expireChats(): void {
   const d = db();
   ensureChats(d);
   const now = Date.now();
-  const dead = d.chats.filter((c) => c.status === "active" && new Date(c.expires_at).getTime() <= now);
-  if (dead.length === 0) return;
-  const deadIds = new Set(dead.map((c) => c.id));
-  for (const c of dead) c.status = "expired";
-  // delete message content + collect chat-owned media files
-  const deadMedia: string[] = [];
   const deadMsgIds = new Set<string>();
+  const deadMedia: string[] = [];
   d.chat_messages = d.chat_messages.filter((m) => {
-    if (!deadIds.has(m.conversation_id)) return true;
+    if (!m.expires_at || new Date(m.expires_at).getTime() > now) return true;
     deadMsgIds.add(m.id);
     if (m.media_url && m.media_url.startsWith("/api/media/")) deadMedia.push(m.media_url);
     return false;
   });
-  if (deadMsgIds.size > 0) d.message_reactions = d.message_reactions.filter((r) => !deadMsgIds.has(r.message_id));
+  if (deadMsgIds.size === 0) return;
+  d.message_reactions = d.message_reactions.filter((r) => !deadMsgIds.has(r.message_id));
   // remove media files that belong exclusively to chat (local uploads only);
   // video messages may also have a "-poster.webp" sibling
   for (const url of deadMedia) {
@@ -198,9 +216,19 @@ export function expireChats(): void {
   persistChats();
 }
 
+/** All conversations are persistent — the contact list never expires. */
 function activeChats(d: ReturnType<typeof db>): ChatConversation[] {
+  return d.chats.filter((c) => c.status === "active");
+}
+
+/** Only messages that have not reached their own expires_at. The expiration
+ * worker deletes expired ones; this filter is the server's authoritative
+ * access restriction in case a query races the worker. */
+function liveMessages(d: ReturnType<typeof db>, conversationId: string): ChatMessage[] {
   const now = Date.now();
-  return d.chats.filter((c) => c.status === "active" && new Date(c.expires_at).getTime() > now);
+  return d.chat_messages
+    .filter((m) => m.conversation_id === conversationId && m.expires_at && new Date(m.expires_at).getTime() > now)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
 }
 
 function otherId(c: ChatConversation, userId: string): string {
@@ -225,14 +253,19 @@ export function chatUnreadTotal(user: Profile): number {
     const p1 = toCanonicalUuid(c.participants[1]);
     if (p0 !== canonUserId && p1 !== canonUserId) continue;
     if (c.muted?.[user.id] || c.muted?.[canonUserId]) continue;
-    const last = d.chat_messages.filter((m) => m.conversation_id === c.id);
-    const other = otherId(c, user.id);
     const lastRead = c.reads?.[user.id] ?? c.reads?.[canonUserId] ?? "";
-    total += last.filter((m) => toCanonicalUuid(m.sender_id) === other && m.created_at > lastRead).length;
+    const other = otherId(c, user.id);
+    total += liveMessages(d, c.id).filter(
+      (m) => toCanonicalUuid(m.sender_id) === other && m.created_at > lastRead
+    ).length;
   }
   return total;
 }
 
+/** The chat list is built from PERSISTENT conversations — every conversation
+ * the user participates in appears here forever, even when all of its
+ * messages have expired (then preview is "" → the client shows "start a
+ * chat"). Expired last messages never leak into the preview. */
 export function listChats(user: Profile): ChatListItem[] {
   const d = db();
   ensureChats(d);
@@ -247,15 +280,13 @@ export function listChats(user: Profile): ChatListItem[] {
     if (blocked.has(oid)) continue; // blocked conversations vanish from the list
     const otherProfile = d.users.find((u) => toCanonicalUuid(u.id) === oid);
     if (!otherProfile) continue;
-    const msgs = d.chat_messages
-      .filter((m) => m.conversation_id === c.id)
-      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+    const msgs = liveMessages(d, c.id);
     const last = msgs[msgs.length - 1];
     const lastRead = c.reads?.[user.id] ?? c.reads?.[canonUserId] ?? "";
     const unread = msgs.filter((m) => toCanonicalUuid(m.sender_id) === oid && m.created_at > lastRead).length;
     const previewUser = last ? d.users.find((u) => toCanonicalUuid(u.id) === toCanonicalUuid(last.sender_id)) : null;
     const previewText =
-      last == null ? "Say something. It'll be gone tomorrow."
+      last == null ? "" // empty thread — the client shows its ephemeral "start a chat" label
       : last.type === "post" ? (last.content || "Sent a MEMORE post") + (previewUser && toCanonicalUuid(previewUser.id) === canonUserId ? "" : "")
       : last.type === "image" ? "photo"
       : last.type === "video" ? "video"
@@ -265,10 +296,9 @@ export function listChats(user: Profile): ChatListItem[] {
       other: { id: oid, username: otherProfile.username, display_name: otherProfile.display_name, avatar_bg: otherProfile.avatar_bg },
       preview: previewText,
       preview_type: last?.type ?? "text",
-      last_at: last?.created_at ?? c.created_at,
+      last_at: last?.created_at ?? c.updated_at ?? c.created_at,
       unread,
-      remaining_ms: Math.max(0, new Date(c.expires_at).getTime() - Date.now()),
-      expires_at: c.expires_at,
+      temp_chat: !!c.temp_chat,
       muted: !!(c.muted?.[user.id] || c.muted?.[canonUserId]),
     });
   }
@@ -286,6 +316,8 @@ export async function getOrCreateConversation(user: Profile, otherUsername: stri
   if (isBlocked(user, canonOther)) return { error: "You blocked this user." };
   if (isBlocked(other, canonUser) || other.suspended) return { error: "Chat isn't available with this user." };
 
+  // Conversations are persistent — an existing thread is ALWAYS reusable, no
+  // matter that all of its messages may have expired. No search required.
   const existing = activeChats(d).find((c) => {
     const p0 = toCanonicalUuid(c.participants[0]);
     const p1 = toCanonicalUuid(c.participants[1]);
@@ -298,7 +330,7 @@ export async function getOrCreateConversation(user: Profile, otherUsername: stri
     id: `c_${uid()}`,
     participants: [canonUser, canonOther].sort() as [string, string],
     created_at: now.toISOString(),
-    expires_at: new Date(now.getTime() + CHAT_TTL_MS).toISOString(),
+    updated_at: now.toISOString(),
     status: "active",
     reads: { [canonUser]: now.toISOString() },
     muted: {},
@@ -322,17 +354,15 @@ export function getChatDetail(
   const p0 = toCanonicalUuid(c.participants[0]);
   const p1 = toCanonicalUuid(c.participants[1]);
   if (p0 !== canonUserId && p1 !== canonUserId) return { error: "Chat not found.", status: 404 };
-  const remaining = new Date(c.expires_at).getTime() - Date.now();
-  if (c.status !== "active" || remaining <= 0) return { error: "expired", status: 410 };
+  // Conversations are persistent — an expired/empty thread is a normal,
+  // reachable chat. Only non-expired MESSAGES are ever returned.
 
   const oid = p0 === canonUserId ? p1 : p0;
   const otherProfile = d.users.find((u) => toCanonicalUuid(u.id) === oid);
   if (!otherProfile) return { error: "Chat not found.", status: 404 };
 
   const otherRead = c.reads?.[oid] ?? "";
-  let convMessages = d.chat_messages
-    .filter((m) => m.conversation_id === c.id)
-    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  let convMessages = liveMessages(d, c.id);
 
   const isDelta = !!options?.after;
   if (options?.after) {
@@ -374,8 +404,7 @@ export function getChatDetail(
     conversation: {
       id: c.id,
       created_at: c.created_at,
-      expires_at: c.expires_at,
-      remaining_ms: Math.max(0, remaining),
+      temp_chat: !!c.temp_chat,
       other_read_at: otherRead,
     },
     other: { id: oid, username: otherProfile.username, display_name: otherProfile.display_name, avatar_bg: otherProfile.avatar_bg },
@@ -401,10 +430,8 @@ export async function sendMessage(user: Profile, conversationId: string, input: 
   const p0 = toCanonicalUuid(c.participants[0]);
   const p1 = toCanonicalUuid(c.participants[1]);
   if (p0 !== canonUserId && p1 !== canonUserId) return { error: "Chat not found.", status: 404 };
-  // server-authoritative expiration — a tampered client clock changes nothing
-  if (c.status !== "active" || new Date(c.expires_at).getTime() <= Date.now()) {
-    return { error: "Too late. This chat disappeared.", status: 410 };
-  }
+  // Conversations are persistent — always sendable. The NEW message gets its
+  // own server-authoritative lifetime: created_at + 24h.
 
   // a reply references another message in this same conversation — never a copy
   let replyTo: string | null = null;
@@ -415,13 +442,14 @@ export async function sendMessage(user: Profile, conversationId: string, input: 
   }
 
   let message: ChatMessage;
+  const expiresAt = new Date(Date.now() + CHAT_TTL_MS).toISOString(); // server clock only
   if (input.type === "sticker") {
     const sticker = input.sticker_id && STICKER_IDS.includes(input.sticker_id) ? input.sticker_id : null;
     if (!sticker) return { error: "Unknown sticker." };
     message = {
       id: uid(), conversation_id: c.id, sender_id: canonUserId, type: "sticker",
       content: "", post_id: null, media_url: null, sticker_id: sticker, reply_to_message_id: replyTo,
-      created_at: new Date().toISOString(),
+      created_at: new Date().toISOString(), expires_at: expiresAt,
     };
   } else if (input.type === "post") {
     const post = d.memes.find((m) => m.id === input.post_id && m.status === "live");
@@ -430,7 +458,7 @@ export async function sendMessage(user: Profile, conversationId: string, input: 
       id: uid(), conversation_id: c.id, sender_id: canonUserId, type: "post",
       content: (input.content ?? "").slice(0, 280), post_id: post.id, media_url: null,
       sticker_id: null, reply_to_message_id: replyTo,
-      created_at: new Date().toISOString(),
+      created_at: new Date().toISOString(), expires_at: expiresAt,
     };
   } else if (input.type === "image" || input.type === "video") {
     if (!input.media_url) return { error: "Missing media." };
@@ -438,7 +466,7 @@ export async function sendMessage(user: Profile, conversationId: string, input: 
       id: uid(), conversation_id: c.id, sender_id: canonUserId, type: input.type,
       content: (input.content ?? "").slice(0, 280), post_id: null, media_url: input.media_url,
       sticker_id: null, reply_to_message_id: replyTo,
-      created_at: new Date().toISOString(),
+      created_at: new Date().toISOString(), expires_at: expiresAt,
     };
   } else {
     const content = (input.content ?? "").trim().slice(0, 280);
@@ -447,12 +475,13 @@ export async function sendMessage(user: Profile, conversationId: string, input: 
       id: uid(), conversation_id: c.id, sender_id: canonUserId, type: "text",
       content, post_id: null, media_url: null,
       sticker_id: null, reply_to_message_id: replyTo,
-      created_at: new Date().toISOString(),
+      created_at: new Date().toISOString(), expires_at: expiresAt,
     };
   }
 
   d.chat_messages.push(message);
   c.reads = { ...c.reads, [user.id]: message.created_at, [canonUserId]: message.created_at };
+  c.updated_at = message.created_at;
   save();
   await persistChats(true);
   return {
@@ -477,9 +506,6 @@ export async function reactToMessage(user: Profile, conversationId: string, mess
   const p0 = toCanonicalUuid(c.participants[0]);
   const p1 = toCanonicalUuid(c.participants[1]);
   if (p0 !== canonUserId && p1 !== canonUserId) return { error: "Chat not found.", status: 404 };
-  if (c.status !== "active" || new Date(c.expires_at).getTime() <= Date.now()) {
-    return { error: "Too late. This chat disappeared.", status: 410 };
-  }
   const m = d.chat_messages.find((x) => x.id === messageId && x.conversation_id === c.id);
   if (!m) return { error: "Message not found.", status: 404 };
 
@@ -508,9 +534,6 @@ export async function unsendMessage(user: Profile, conversationId: string, messa
   const p0 = toCanonicalUuid(c.participants[0]);
   const p1 = toCanonicalUuid(c.participants[1]);
   if (p0 !== canonUserId && p1 !== canonUserId) return { error: "Chat not found.", status: 404 };
-  if (c.status !== "active" || new Date(c.expires_at).getTime() <= Date.now()) {
-    return { error: "Too late. This chat disappeared.", status: 410 };
-  }
   const m = d.chat_messages.find((x) => x.id === messageId && x.conversation_id === c.id);
   if (!m) return { error: "Already gone." };
   if (toCanonicalUuid(m.sender_id) !== canonUserId) return { error: "You can only unsend your own messages.", status: 403 };
@@ -581,6 +604,63 @@ export async function toggleMute(user: Profile, conversationId: string): Promise
   save();
   await persistChats(false);
   return nextVal;
+}
+
+/** TEMP CHAT toggle — a conversation-level setting, shared by both
+ * participants (same pattern as mute). The conversation itself never expires
+ * or disappears; only the lifetime of messages inside it changes. */
+export async function setTempChat(user: Profile, conversationId: string, enabled: boolean): Promise<boolean | { error: string; status?: number }> {
+  const d = db();
+  ensureChats(d);
+  const canonUserId = toCanonicalUuid(user.id);
+  const c = d.chats.find((x) => x.id === conversationId);
+  if (!c) return { error: "Chat not found.", status: 404 };
+  const p0 = toCanonicalUuid(c.participants[0]);
+  const p1 = toCanonicalUuid(c.participants[1]);
+  if (p0 !== canonUserId && p1 !== canonUserId) return { error: "Chat not found.", status: 404 };
+  c.temp_chat = enabled;
+  c.updated_at = new Date().toISOString();
+  save();
+  await persistChats(true);
+  return !!c.temp_chat;
+}
+
+/** TEMP CHAT close: the user left a temporary chat, so the server purges its
+ * messages (content + reactions + media) — server-authoritative, exactly like
+ * expiration. Deliberately NEVER deletes: the conversation, its participants,
+ * the chat-list contact, or the user relationship. The thread simply shows
+ * the empty state next time it is opened. No-op when TEMP CHAT is off. */
+export async function closeTempChat(user: Profile, conversationId: string): Promise<{ purged: number } | { error: string; status?: number }> {
+  const d = db();
+  ensureChats(d);
+  const canonUserId = toCanonicalUuid(user.id);
+  const c = d.chats.find((x) => x.id === conversationId);
+  if (!c) return { error: "Chat not found.", status: 404 };
+  const p0 = toCanonicalUuid(c.participants[0]);
+  const p1 = toCanonicalUuid(c.participants[1]);
+  if (p0 !== canonUserId && p1 !== canonUserId) return { error: "Chat not found.", status: 404 };
+  if (!c.temp_chat) return { purged: 0 };
+
+  const deadIds = new Set<string>();
+  const deadMedia: string[] = [];
+  d.chat_messages = d.chat_messages.filter((m) => {
+    if (m.conversation_id !== c.id) return true;
+    deadIds.add(m.id);
+    if (m.media_url && m.media_url.startsWith("/api/media/")) deadMedia.push(m.media_url);
+    return false;
+  });
+  d.message_reactions = d.message_reactions.filter((r) => !deadIds.has(r.message_id));
+  save();
+  await persistChats(true);
+
+  for (const url of deadMedia) {
+    const name = url.replace("/api/media/", "");
+    const base = name.replace(/\.[a-z0-9]+$/i, "");
+    for (const file of [name, `${base}-poster.webp`]) {
+      try { fs.unlinkSync(path.join(uploadsDir, file)); } catch { /* already gone */ }
+    }
+  }
+  return { purged: deadIds.size };
 }
 
 export function listContacts(user: Profile): ChatOtherUser[] {

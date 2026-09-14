@@ -26,5 +26,5 @@ export async function POST(req: NextRequest) {
   if (!username) return fail("Pick someone to chat with.");
   const result = await getOrCreateConversation(user, username);
   if ("error" in result) return fail(result.error);
-  return ok({ id: result.conversation.id, expires_at: result.conversation.expires_at, other: result.other.username });
+  return ok({ id: result.conversation.id, temp_chat: !!result.conversation.temp_chat, other: result.other.username });
 }

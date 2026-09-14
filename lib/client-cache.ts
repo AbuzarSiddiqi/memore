@@ -128,7 +128,7 @@ if (typeof window !== "undefined" && "BroadcastChannel" in window) {
 }
 
 type CrossTabEvent =
-  | { type: "CHAT_EXPIRED"; conversationId: string }
+  | { type: "MESSAGES_EXPIRED"; conversationId: string; messageIds: string[] }
   | { type: "LOGOUT"; userId: string }
   | { type: "POST_MUTATED"; memeId: string; patch: any }
   | { type: "CACHE_INVALIDATED"; prefix: string };
@@ -141,10 +141,10 @@ function broadcastSync(event: CrossTabEvent): void {
 
 function handleCrossTabMessage(event: CrossTabEvent): void {
   if (!event || !event.type) return;
-  if (event.type === "CHAT_EXPIRED") {
-    void purgeExpiredChatLocal(event.conversationId);
+  if (event.type === "MESSAGES_EXPIRED") {
+    void purgeExpiredMessagesLocal(event.conversationId);
     if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("memore:chat-expired", { detail: { id: event.conversationId } }));
+      window.dispatchEvent(new CustomEvent("memore:messages-expired", { detail: { id: event.conversationId, messageIds: event.messageIds } }));
     }
   } else if (event.type === "LOGOUT") {
     void purgeUserPrivateCache(event.userId);
@@ -312,21 +312,29 @@ export async function setCachedChats(userId: string, chats: any[]): Promise<void
 // ---------------------------------------------------------------- Chat Messages Cache & Cursor
 export async function getCachedMessages(conversationId: string): Promise<any[]> {
   const mem = getMemoryCache<any[]>(`messages:${conversationId}`);
-  if (mem && mem.length > 0) return mem;
+  if (mem && mem.length > 0) return mem.filter((m: any) => !isExpired(m));
 
   const db = await openClientDb();
   if (!db) return [];
 
   return new Promise((resolve) => {
     try {
-      const tx = db.transaction("messages", "readonly");
+      const tx = db.transaction("messages", "readwrite");
       const store = tx.objectStore("messages");
       const idx = store.index("conversation_id");
       const req = idx.getAll(conversationId);
       req.onsuccess = () => {
-        const rows = (req.result || [])
-          .map((r: any) => r.data)
-          .sort((a: any, b: any) => a.created_at.localeCompare(b.created_at));
+        const rows: any[] = [];
+        for (const r of req.result || []) {
+          // expired messages never come back from the cache — the server is
+          // authoritative, this is just the local echo of its decision
+          if (isExpired(r.data)) {
+            store.delete(r.id ?? r.data.id);
+            continue;
+          }
+          rows.push(r.data);
+        }
+        rows.sort((a: any, b: any) => a.created_at.localeCompare(b.created_at));
         if (rows.length > 0) {
           setMemoryCache(`messages:${conversationId}`, rows);
         }
@@ -339,7 +347,12 @@ export async function getCachedMessages(conversationId: string): Promise<any[]> 
   });
 }
 
-export async function appendCachedMessages(conversationId: string, newMessages: any[], expiresAt?: string): Promise<any[]> {
+/** A cached message whose own expires_at has passed is dead locally too. */
+function isExpired(m: any): boolean {
+  return !!m?.expires_at && new Date(m.expires_at).getTime() <= Date.now();
+}
+
+export async function appendCachedMessages(conversationId: string, newMessages: any[], _legacyExpiresAt?: string): Promise<any[]> {
   if (!newMessages || newMessages.length === 0) {
     return getCachedMessages(conversationId);
   }
@@ -351,7 +364,7 @@ export async function appendCachedMessages(conversationId: string, newMessages: 
     byId.set(m.id, m);
   }
 
-  const merged = Array.from(byId.values()).sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const merged = Array.from(byId.values()).filter((m: any) => !isExpired(m)).sort((a: any, b: any) => a.created_at.localeCompare(b.created_at));
   setMemoryCache(`messages:${conversationId}`, merged);
 
   const db = await openClientDb();
@@ -360,12 +373,13 @@ export async function appendCachedMessages(conversationId: string, newMessages: 
       const tx = db.transaction("messages", "readwrite");
       const store = tx.objectStore("messages");
       for (const m of newMessages) {
+        // each message carries its OWN expires_at (server-stamped)
         store.put({
           id: m.id,
           conversation_id: conversationId,
           data: m,
           created_at: m.created_at,
-          expires_at: expiresAt,
+          expires_at: m.expires_at ?? null,
         });
       }
     } catch (err) {
@@ -414,17 +428,39 @@ export async function updateCachedMessageReactions(conversationId: string, messa
 }
 
 
-// ---------------------------------------------------------------- 24-Hour Purge & Expiration
-export async function purgeExpiredChatLocal(conversationId: string): Promise<void> {
-  deleteMemoryCache(`messages:${conversationId}`);
+// ---------------------------------------------------------------- Message Expiry Purge
 
+/** Remove only the EXPIRED messages of one conversation from the local
+ * caches (memory + IndexedDB). The conversation row is kept — the contact
+ * survives even when every message is gone. */
+export async function purgeExpiredMessagesLocal(conversationId: string): Promise<void> {
+  const mem = getMemoryCache<any[]>(`messages:${conversationId}`);
+  if (mem) {
+    setMemoryCache(`messages:${conversationId}`, mem.filter((m) => !isExpired(m)));
+  }
   const db = await openClientDb();
   if (!db) return;
-
   try {
-    const tx = db.transaction(["chats", "messages"], "readwrite");
-    tx.objectStore("chats").delete(conversationId);
+    const tx = db.transaction("messages", "readwrite");
+    const store = tx.objectStore("messages");
+    const idx = store.index("conversation_id");
+    const req = idx.getAll(conversationId);
+    req.onsuccess = () => {
+      for (const row of req.result || []) {
+        if (isExpired(row.data)) store.delete(row.id ?? row.data.id);
+      }
+    };
+  } catch {}
+}
 
+/** TEMP CHAT close: drop ALL local messages of one conversation (memory +
+ * IndexedDB). The conversation row itself stays so the contact remains. */
+export async function purgeConversationMessagesLocal(conversationId: string): Promise<void> {
+  deleteMemoryCache(`messages:${conversationId}`);
+  const db = await openClientDb();
+  if (!db) return;
+  try {
+    const tx = db.transaction("messages", "readwrite");
     const msgStore = tx.objectStore("messages");
     const idx = msgStore.index("conversation_id");
     const req = idx.getAllKeys(conversationId);
@@ -436,38 +472,34 @@ export async function purgeExpiredChatLocal(conversationId: string): Promise<voi
   } catch {}
 }
 
+/** Background sweep: purge every locally cached message whose own expires_at
+ * has passed, across all conversations. Conversations are NEVER deleted —
+ * they are persistent contacts. Broadcasts a cross-tab sync event. */
 export async function sweepExpiredChats(): Promise<void> {
   const db = await openClientDb();
   if (!db) return;
 
   try {
-    const tx = db.transaction(["chats", "messages"], "readwrite");
-    const chatStore = tx.objectStore("chats");
+    const tx = db.transaction("messages", "readwrite");
     const msgStore = tx.objectStore("messages");
     const now = Date.now();
+    const req = msgStore.getAll();
+    const deadByConversation = new Map<string, string[]>();
 
-    const req = chatStore.getAll();
     req.onsuccess = () => {
-      const deadIds: string[] = [];
       for (const row of req.result || []) {
-        if (row.expires_at && new Date(row.expires_at).getTime() <= now) {
-          deadIds.push(row.id);
-          chatStore.delete(row.id);
-          deleteMemoryCache(`messages:${row.id}`);
+        if (row.data?.expires_at && new Date(row.data.expires_at).getTime() <= now) {
+          msgStore.delete(row.id ?? row.data.id);
+          const convId = row.conversation_id ?? row.data.conversation_id;
+          deadByConversation.set(convId, [...(deadByConversation.get(convId) ?? []), row.data.id]);
         }
       }
-
-      if (deadIds.length > 0) {
-        const idx = msgStore.index("conversation_id");
-        for (const deadId of deadIds) {
-          const keysReq = idx.getAllKeys(deadId);
-          keysReq.onsuccess = () => {
-            for (const k of keysReq.result || []) {
-              msgStore.delete(k);
-            }
-          };
-          broadcastSync({ type: "CHAT_EXPIRED", conversationId: deadId });
+      for (const [conversationId, ids] of deadByConversation) {
+        const mem = getMemoryCache<any[]>(`messages:${conversationId}`);
+        if (mem) {
+          setMemoryCache(`messages:${conversationId}`, mem.filter((m) => !ids.includes(m.id)));
         }
+        broadcastSync({ type: "MESSAGES_EXPIRED", conversationId, messageIds: ids });
       }
     };
   } catch {}

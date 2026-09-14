@@ -102,17 +102,7 @@
    visual viewport with the chat and always wraps exactly the visible screen.
    The home-indicator clearance lives on the composer's safe-area padding
    INSIDE the frame — never on the frame itself. */
-.chat-screen-frame {
-  position: absolute;
-  left: 5px;
-  right: 5px;
-  top: max(8px, env(safe-area-inset-top, 16px));
-  bottom: 5px;
-  border: 1.5px solid rgba(124, 77, 255, 0.42);
-  border-radius: 26px;
-  pointer-events: none;
-  z-index: 68;
-}
+/* Chat Screen Frame — REMOVED: the chat is frameless, edge-to-edge. */
 
 /* MEMORE Quirky Chat Interaction Animations */
 @keyframes msgZuup {
