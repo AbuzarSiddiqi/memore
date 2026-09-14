@@ -223,6 +223,8 @@ export default function ChatPage() {
   const [investMeme, setInvestMeme] = useState<MemeView | null>(null);
   const [attach, setAttach] = useState(false);
   const screenRef = useRef<HTMLDivElement | null>(null);
+  const debugRef = useRef<HTMLDivElement | null>(null);
+  const debugOn = typeof window !== "undefined" && window.location.search.includes("chatdebug");
   const vvMaxRef = useRef(0); // tallest the visual viewport has been while idle — the keyboard signal
   const [animatingMsgIds, setAnimatingMsgIds] = useState<Record<string, "zuup" | "receive" | "unsend" | "sticker">>({});
   const [doubleTapBurst, setDoubleTapBurst] = useState<{ msgId: string; x: number; y: number } | null>(null);
@@ -395,17 +397,23 @@ export default function ChatPage() {
     };
   }, []);
 
-  // 2. Keyboard handling — THE RULE: trust sizes, never positions.
-  // The root is glued to the TOP of the layout viewport (top: 0; the header
-  // physically cannot move) and JS drives exactly one value: --chat-bottom,
-  // the keyboard's overlap with the layout viewport,
-  //     max(0, window.innerHeight − visualViewport.height).
-  // On platforms where the keyboard resizes the viewport (Android, iOS 18+)
-  // that difference is 0 and pure CSS lays everything out; on older iOS it is
-  // the keyboard height and the root's bottom edge rides the keyboard. iOS's
-  // keyboard PAN (vv.offsetTop / scrollY) is deliberately ignored: it is an
-  // elastic, self-reverting register and reacting to it is what made the UI
-  // bounce and drift. No positions are read or written, ever.
+  // 2. Keyboard handling — reads SIZE from whichever signal the platform gives.
+  // iOS 26 keyboards are a pure overlay: neither innerHeight nor vv.height
+  // shrinks, and iOS "reveals" the focused input by pushing the ENTIRE page up
+  // by the keyboard height (fixed elements ride that push — the header slid
+  // under the status bar). On those platforms the push itself is the keyboard
+  // signal: pan = vv.offsetTop + pageYOffset. On Android / older iOS the
+  // viewport resizes instead and the keyboard height is innerHeight − vv.height
+  // with no push. One formula covers both families:
+  //     keyboard = max(push, innerHeight − vv.height)
+  // and the root is placed at top = push with height = innerHeight − keyboard.
+  // The push compensation is tracked CONTINUOUSLY (rAF loop while focused or
+  // while the OS is still animating), so iOS's elastic pan can never leave a
+  // stale offset behind — event-driven tracking is what bounced before. When
+  // the keyboard closes and iOS releases the push, the root settles back to
+  // full height in lockstep with it. Observable result on every device: the
+  // header stays at the top of the screen, the composer sits on the keyboard
+  // edge, zero gap, no glide.
   useEffect(() => {
     const el = screenRef.current;
     if (!el) return;
@@ -414,49 +422,77 @@ export default function ChatPage() {
       !!n && (n.tagName === "INPUT" || n.tagName === "TEXTAREA" || (n as HTMLElement).isContentEditable);
 
     let rafId = 0;
+    let running = false;
+    let lastTop = "";
+    let lastH = "";
+    let lastPad = "";
+
     const syncViewport = () => {
-      // RAF-debounce: coalesce rapid visual-viewport events (the keyboard
-      // animation fires many per frame) into a single style update per frame.
-      cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        const vv = window.visualViewport;
-        if (!vv) {
-          el.style.setProperty("--chat-bottom", "0px");
-          return;
-        }
+      const vv = window.visualViewport;
+      const ivh = window.innerHeight;
+      const push = (vv?.offsetTop ?? 0) + (window.pageYOffset ?? 0);
+      const vvShrink = Math.max(0, ivh - (vv?.height ?? ivh));
+      const keyboard = Math.max(push, vvShrink);
+      const rootH = Math.max(0, ivh - keyboard);
 
-        el.style.setProperty("--chat-bottom", `${Math.max(0, window.innerHeight - vv.height)}px`);
+      const top = `${push}px`;
+      const h = `${rootH}px`;
+      if (top !== lastTop) { el.style.setProperty("--chat-top", top); lastTop = top; }
+      if (h !== lastH) { el.style.setProperty("--chat-h", h); lastH = h; }
 
-        // Track the tallest idle visual viewport height as the keyboard-closed
-        // baseline — never let it decrease while an editable is focused.
-        if (!isEditable(document.activeElement) || vv.height > vvMaxRef.current) {
-          vvMaxRef.current = vv.height;
-        }
-        const keyboardOpen = vv.height < vvMaxRef.current - 40;
-        el.style.setProperty(
-          "--chat-bottom-padding",
-          keyboardOpen ? "0px" : "env(safe-area-inset-bottom, 0px)"
-        );
+      // Keyboard-open state for the composer's safe-area padding. On
+      // resize-platforms the visual viewport shrinks; on overlay platforms
+      // (iOS 26) the push is the only signal.
+      const vvh = vv?.height ?? ivh;
+      if (!isEditable(document.activeElement) || vvh > vvMaxRef.current) {
+        vvMaxRef.current = vvh;
+      }
+      const keyboardOpen = vvh < vvMaxRef.current - 40 || (isEditable(document.activeElement) && push > 60);
+      const pad = keyboardOpen ? "0px" : "env(safe-area-inset-bottom, 0px)";
+      if (pad !== lastPad) { el.style.setProperty("--chat-bottom-padding", pad); lastPad = pad; }
 
-        // Keep newest messages visible only if user was already at the bottom
-        if (isNearBottomRef.current && listRef.current) {
-          listRef.current.scrollTop = listRef.current.scrollHeight;
-        }
-      });
+      // Keep newest messages visible only if user was already at the bottom
+      if (isNearBottomRef.current && listRef.current) {
+        listRef.current.scrollTop = listRef.current.scrollHeight;
+      }
+
+      if (debugRef.current) {
+        debugRef.current.textContent =
+          `ivh=${ivh} vv=${vv?.height ?? "?"} off=${vv?.offsetTop ?? "?"} scroll=${window.pageYOffset ?? 0}\n` +
+          `push=${push} shrink=${vvShrink} kb=${keyboard} root=${rootH}`;
+      }
+    };
+
+    const tick = () => {
+      syncViewport();
+      const vv = window.visualViewport;
+      const push = (vv?.offsetTop ?? 0) + (window.pageYOffset ?? 0);
+      const shrunk = Math.max(0, window.innerHeight - (vv?.height ?? window.innerHeight));
+      const focused = isEditable(document.activeElement);
+      if (focused || Math.abs(push) > 1 || shrunk > 1) {
+        rafId = requestAnimationFrame(tick); // keep 1:1 with the OS keyboard/pan animation
+      } else {
+        running = false;
+      }
+    };
+
+    const kick = () => {
+      if (!running) { running = true; rafId = requestAnimationFrame(tick); }
     };
 
     syncViewport();
-
-    // Size events only. Scroll events (vv or window) carry the pan, which we
-    // ignore by design — listening to them accomplishes nothing here.
     const vv = window.visualViewport;
-    vv?.addEventListener("resize", syncViewport);
-    window.addEventListener("resize", syncViewport);
+    vv?.addEventListener("resize", kick);
+    window.addEventListener("resize", kick);
+    document.addEventListener("focusin", kick);
+    document.addEventListener("focusout", kick); // keep ticking while iOS releases the push
 
     return () => {
       cancelAnimationFrame(rafId);
-      vv?.removeEventListener("resize", syncViewport);
-      window.removeEventListener("resize", syncViewport);
+      vv?.removeEventListener("resize", kick);
+      window.removeEventListener("resize", kick);
+      document.removeEventListener("focusin", kick);
+      document.removeEventListener("focusout", kick);
     };
   }, []);
 
@@ -993,6 +1029,17 @@ export default function ChatPage() {
         }}
       >
         <ScreenFrame />
+        {debugOn && (
+          <div
+            ref={debugRef}
+            aria-hidden
+            style={{
+              position: "fixed", top: "calc(var(--chat-top, 0px) + 2px)", left: 2, zIndex: 999, pointerEvents: "none",
+              background: "rgba(0,0,0,0.85)", color: "#C8FF3D", font: "11px/1.5 monospace",
+              padding: "4px 6px", borderRadius: 6, whiteSpace: "pre",
+            }}
+          />
+        )}
         {clickShield && <div className="absolute inset-0 z-[80]" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} />}
 
       {/* header - stays fixed at top */}
@@ -1200,7 +1247,7 @@ export default function ChatPage() {
       <div
         className="relative z-20 shrink-0 px-3.5 pt-2"
         style={{
-          paddingBottom: "max(12px, calc(var(--chat-bottom-padding, env(safe-area-inset-bottom, 0px)) + 6px))",
+          paddingBottom: "calc(var(--chat-bottom-padding, env(safe-area-inset-bottom, 0px)) + 6px)",
         }}
       >
         {attach && (

@@ -87,22 +87,22 @@
 }
 
 /* MEMORE Chat Keyboard & Viewport Architecture.
-   THE RULE: trust sizes, never positions. The root is glued to the TOP of the
-   layout viewport (top: 0 — JS never moves it, so the header physically
-   cannot shift) and its bottom edge is the keyboard's overlap with the layout
-   viewport: `--chat-bottom = max(0, innerHeight − visualViewport.height)`.
-   On platforms where the keyboard already resizes the viewport (Android,
-   iOS 18+) that overlap is 0 and pure CSS lays everything out; on older iOS
-   it equals the keyboard height. iOS's keyboard PAN (vv.offsetTop) is
-   deliberately IGNORED — it is an elastic, self-reverting register, and
-   chasing it (or scrolling against it) is what caused the bouncing/gaps.
-   No transitions: updates must track the keyboard 1:1. */
+   The keyboard's height comes from whichever signal the platform provides:
+   on Android / older iOS the viewport resizes (innerHeight − vv.height); on
+   iOS 26 the keyboard is a pure overlay and iOS PUSHES the whole page up by
+   the keyboard height — there the push (vv.offsetTop + pageYOffset) is the
+   signal. JS sets --chat-top = push (cancelling iOS's push in layout
+   coordinates) and --chat-h = innerHeight − keyboard, tracked continuously
+   per-frame while the keyboard is open so iOS's elastic push can never leave
+   a stale offset. Net effect on every device: the header stays at the top of
+   the screen and the composer sits exactly on the keyboard edge. No
+   transitions — updates must track the OS 1:1. */
 .chat-screen {
   position: fixed;
   left: 0;
   right: 0;
-  top: 0;
-  bottom: var(--chat-bottom, 0px);
+  top: var(--chat-top, 0px);
+  height: var(--chat-h, 100%);
   overscroll-behavior: none;
 }
 
