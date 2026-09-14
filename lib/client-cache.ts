@@ -637,6 +637,79 @@ export async function removePostFromCaches(memeId: string): Promise<void> {
   } catch {}
 }
 
+/** Optimistically patch a meme across hot memory cache, IndexedDB, and broadcast
+ * to all components in the current window and across tabs with 0 database stress. */
+export function mutateMemeLocally(memeId: string, patch: Record<string, any>): void {
+  if (!memeId || !patch) return;
+
+  // 1. In-memory hot cache update
+  const cached = getMemoryCache<any>(`meme:${memeId}`);
+  if (cached) {
+    setMemoryCache(`meme:${memeId}`, { ...cached, ...patch });
+  }
+
+  // 2. Feed tabs hot cache update
+  for (const tab of ["foryou", "new", "mix", "trending", "following"]) {
+    const feed = getMemoryCache<any[]>(`feed:${tab}`);
+    if (feed && Array.isArray(feed)) {
+      let changed = false;
+      const updated = feed.map((m) => {
+        if (m && m.id === memeId) {
+          changed = true;
+          return { ...m, ...patch };
+        }
+        return m;
+      });
+      if (changed) {
+        setMemoryCache(`feed:${tab}`, updated);
+      }
+    }
+  }
+
+  // 3. Persist to IndexedDB asynchronously
+  void (async () => {
+    const db = await openClientDb();
+    if (!db) return;
+    try {
+      const tx = db.transaction(["memes", "feed"], "readwrite");
+      const memeStore = tx.objectStore("memes");
+      const req = memeStore.get(memeId);
+      req.onsuccess = () => {
+        if (req.result?.data) {
+          memeStore.put({ id: memeId, data: { ...req.result.data, ...patch }, timestamp: Date.now() });
+        }
+      };
+      const feedStore = tx.objectStore("feed");
+      const feedReq = feedStore.getAll();
+      feedReq.onsuccess = () => {
+        for (const row of feedReq.result ?? []) {
+          if (Array.isArray(row.memes)) {
+            let changed = false;
+            const updated = row.memes.map((m: any) => {
+              if (m && m.id === memeId) {
+                changed = true;
+                return { ...m, ...patch };
+              }
+              return m;
+            });
+            if (changed) {
+              feedStore.put({ ...row, memes: updated });
+            }
+          }
+        }
+      };
+    } catch {}
+  })();
+
+  // 4. Cross-tab BroadcastChannel
+  broadcastSync({ type: "POST_MUTATED", memeId, patch });
+
+  // 5. In-window event for instant 0ms UI update across all active components
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("memore:post-mutated", { detail: { memeId, patch } }));
+  }
+}
+
 // ---------------------------------------------------------------- Periodic cleanup trigger on load
 if (typeof window !== "undefined") {
   setTimeout(() => {

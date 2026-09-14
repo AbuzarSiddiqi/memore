@@ -522,6 +522,7 @@ export function emptyWorld(): DB {
     chats: [],
     chat_messages: [],
     message_reactions: [],
+    post_mentions: [],
     achievements: ACHIEVEMENTS,
     user_achievements: [],
     user_daily: [],

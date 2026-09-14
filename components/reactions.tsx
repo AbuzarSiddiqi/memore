@@ -152,7 +152,7 @@ export function ReactionStamps({ reactions, mine, variant = "bubble", onToggle }
             key={r.reaction_id}
             onClick={(e) => { e.stopPropagation(); onToggle(r.reaction_id); }}
             aria-label={`Reaction ${reactionDef(r.reaction_id)?.label ?? r.reaction_id}${r.mine ? " (yours — tap to remove)" : ""}`}
-            className={`flex items-center border-2 font-bold leading-none transition-transform active:scale-90 ${
+            className={`reaction-anim-pop flex items-center border-2 font-bold leading-none transition-transform active:scale-90 ${
               r.count > 1 ? "gap-1 px-2 py-[5px]" : "h-[28px] w-[28px] justify-center"
             }`}
             style={{
@@ -214,7 +214,7 @@ export function ReactionTray({
 
   return (
     <div
-      className="react-tray fixed z-[90]"
+      className="react-tray tray-anim-spring fixed z-[90]"
       style={{ top, left, width: TRAY_W }}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}

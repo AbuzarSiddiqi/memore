@@ -5,6 +5,7 @@
 // invest API call; `AuraBurst` renders the visuals at each tap point.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, useSession, useToast } from "@/lib/client";
+import { mutateMemeLocally } from "@/lib/client-cache";
 import { playSfx } from "@/lib/sfx";
 import type { MemeView } from "@/lib/types";
 
@@ -18,8 +19,13 @@ export function useTapInvest(meme: MemeView, opts?: { prefix?: string; cap?: num
   const toast = useToast();
   const [events, setEvents] = useState<AuraEvent[]>([]);
   const pending = useRef(0);
+  const currentTotalInvested = useRef(meme.total_invested ?? 0);
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [myInvested, setMyInvested] = useState(meme.my_position?.invested_amount ?? 0);
+
+  useEffect(() => {
+    currentTotalInvested.current = Math.max(currentTotalInvested.current, meme.total_invested ?? 0);
+  }, [meme.total_invested]);
 
   useEffect(() => {
     setMyInvested(meme.my_position?.invested_amount ?? 0);
@@ -33,13 +39,22 @@ export function useTapInvest(meme: MemeView, opts?: { prefix?: string; cap?: num
       const r = await api<{ position: { invested_amount: number } | null }>(`/api/memes/${meme.id}/invest`, {
         json: { amount, client_id: `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` },
       });
-      if (r.position) setMyInvested(r.position.invested_amount);
-      // let any listening page refetch counts immediately (reels realtime values)
+      if (r.position) {
+        setMyInvested(r.position.invested_amount);
+        mutateMemeLocally(meme.id, {
+          total_invested: currentTotalInvested.current,
+          my_position: r.position,
+        });
+      }
       if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("aura:traded"));
-      setTimeout(() => refresh(), 400);
+      setTimeout(() => refresh(), 600);
     } catch (e) {
       // server rejected the batch — roll back the optimistic counter
+      currentTotalInvested.current = Math.max(0, currentTotalInvested.current - amount);
       setMyInvested((v) => Math.max(0, Math.round((v - amount) * 10) / 10));
+      mutateMemeLocally(meme.id, {
+        total_invested: currentTotalInvested.current,
+      });
       toast((e as Error).message, "err");
     }
   }, [meme.id, prefix, refresh, toast]);
@@ -51,13 +66,18 @@ export function useTapInvest(meme: MemeView, opts?: { prefix?: string; cap?: num
     }
     playSfx("cash");
     pending.current += 1;
+    currentTotalInvested.current += 1;
     setMyInvested((v) => Math.round((v + 1) * 10) / 10);
+    // Instant 0ms optimistic update across all cards, rails, and tabs
+    mutateMemeLocally(meme.id, {
+      total_invested: currentTotalInvested.current,
+    });
     const id = Date.now() + Math.random();
     setEvents((f) => [...f.slice(-(cap - 1)), { id, x, y }]);
     setTimeout(() => setEvents((f) => f.filter((v) => v.id !== id)), 1100);
     if (flushTimer.current) clearTimeout(flushTimer.current);
     flushTimer.current = setTimeout(flush, 380);
-  }, [user, toast, cap]);
+  }, [user, toast, cap, meme.id, flush]);
 
   // Fire any pending investment if the slide unmounts mid-batch.
   useEffect(() => () => {

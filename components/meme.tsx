@@ -6,10 +6,11 @@ import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import type { Heat, MemeView } from "@/lib/types";
 import { api, fmtAura, fmtNum, fmtPct, timeAgo, useSession, useToast } from "@/lib/client";
+import { mutateMemeLocally } from "@/lib/client-cache";
 import { playSfx } from "@/lib/sfx";
 import { AuraBurst, useTapInvest } from "./aura-burst";
 import { ShareSheet } from "./share";
-import { TextPostBody, TextThumb } from "./text-meme";
+import { TextPostBody, TextThumb, TextMemeCard } from "./text-meme";
 import { Avatar, ChangePct, LabelPill, NeoButton, NeoCard, Sheet } from "./ui";
 import { InstagramEmbed } from "./instagram";
 import { Spark } from "./brand";
@@ -397,6 +398,33 @@ export function FollowButton({ username, initial }: { username: string; initial?
 
 // ---------------------------------------------------------------- floating action rail
 function ActionRail({ meme, onInvest, onComments, onShare, onMenu }: { meme: MemeView; onInvest: () => void; onComments: () => void; onShare: () => void; onMenu: () => void }) {
+  const [counts, setCounts] = useState({
+    invested: meme.total_invested ?? 0,
+    comments: meme.comment_count ?? 0,
+    saves: meme.saves ?? 0,
+  });
+
+  useEffect(() => {
+    setCounts((prev) => ({
+      invested: Math.max(prev.invested, meme.total_invested ?? 0),
+      comments: Math.max(prev.comments, meme.comment_count ?? 0),
+      saves: Math.max(prev.saves, meme.saves ?? 0),
+    }));
+  }, [meme.total_invested, meme.comment_count, meme.saves]);
+
+  useEffect(() => {
+    const onMutated = (e: CustomEvent<{ memeId: string; patch: any }>) => {
+      if (e.detail?.memeId === meme.id && e.detail?.patch) {
+        setCounts((c) => ({
+          invested: e.detail.patch.total_invested !== undefined ? Math.max(c.invested, e.detail.patch.total_invested) : c.invested,
+          comments: e.detail.patch.comment_count !== undefined ? Math.max(c.comments, e.detail.patch.comment_count) : c.comments,
+          saves: e.detail.patch.saves !== undefined ? e.detail.patch.saves : c.saves,
+        }));
+      }
+    };
+    window.addEventListener("memore:post-mutated", onMutated as EventListener);
+    return () => window.removeEventListener("memore:post-mutated", onMutated as EventListener);
+  }, [meme.id]);
 
   const railBtn = "neo-btn icon !bg-black/55 !border-0 backdrop-blur-sm flex-col !w-11 !h-11 gap-0";
   const railNum = "text-[9.5px] font-bold -mt-0.5";
@@ -405,15 +433,15 @@ function ActionRail({ meme, onInvest, onComments, onShare, onMenu }: { meme: Mem
     <div className="absolute right-2.5 bottom-3 z-10 flex flex-col gap-2.5 items-center">
       <button className={railBtn} onClick={(e) => { e.stopPropagation(); onInvest(); }} aria-label="Invest Aura in this meme">
         <Spark size={17} color="#C8FF3D" />
-        <span className={railNum} style={{ color: "#C8FF3D" }}>{fmtNum(meme.total_invested)}</span>
+        <span className={railNum} style={{ color: "#C8FF3D" }}>{fmtNum(counts.invested)}</span>
       </button>
       <button className={railBtn} onClick={(e) => { e.stopPropagation(); onComments(); }} aria-label="Comments">
         <Icon name="comment" size={16} strokeWidth={2.2} />
-        <span className={`${railNum} text-white`}>{meme.comment_count}</span>
+        <span className={`${railNum} text-white`}>{counts.comments}</span>
       </button>
       <button className={railBtn} onClick={(e) => { e.stopPropagation(); onShare(); }} aria-label="Send this meme in a chat">
         <Icon name="share" size={16} strokeWidth={2.4} />
-        <span className={`${railNum} text-white`}>{meme.saves > 99 ? "99+" : meme.saves}</span>
+        <span className={`${railNum} text-white`}>{counts.saves > 99 ? "99+" : counts.saves}</span>
       </button>
       <button className={railBtn} onClick={(e) => { e.stopPropagation(); onMenu(); }} aria-label="More actions">
         <Icon name="dots" size={16} strokeWidth={2.6} />
@@ -429,12 +457,27 @@ function MenuSheet({ meme, open, onClose, onInvest, onSell }: { meme: MemeView; 
   const [saved, setSaved] = useState(!!meme.is_saved);
   const [reportOpen, setReportOpen] = useState(false);
 
+  useEffect(() => {
+    setSaved(!!meme.is_saved);
+  }, [meme.is_saved]);
+
   const save = async () => {
     if (!user) return toast("Log in first.", "err");
-    const r = await api<{ saved: boolean }>(`/api/memes/${meme.id}/save`, { method: "POST" });
-    setSaved(r.saved);
-    refresh();
-    onClose();
+    const nextSaved = !saved;
+    const nextSaves = Math.max(0, (meme.saves || 0) + (nextSaved ? 1 : -1));
+    setSaved(nextSaved);
+    mutateMemeLocally(meme.id, { is_saved: nextSaved, saves: nextSaves });
+    try {
+      const r = await api<{ saved: boolean }>(`/api/memes/${meme.id}/save`, { method: "POST" });
+      setSaved(r.saved);
+      mutateMemeLocally(meme.id, { is_saved: r.saved });
+      refresh();
+      onClose();
+    } catch (e) {
+      setSaved(!nextSaved);
+      mutateMemeLocally(meme.id, { is_saved: !nextSaved, saves: meme.saves });
+      toast((e as Error).message, "err");
+    }
   };
   const share = async () => {
     try { await navigator.clipboard.writeText(`${location.origin}/meme/${meme.id}`); toast("Link copied.", "ok"); onClose(); }
@@ -513,6 +556,9 @@ export function CallSheet({ meme, open, onClose }: { meme: MemeView; open: boole
 
 // ---------------------------------------------------------------- cards
 export function MemeCard({ meme, onChanged }: { meme: MemeView; onChanged?: () => void }) {
+  if (meme.media_type === "text") {
+    return <TextMemeCard meme={meme} onChanged={onChanged} />;
+  }
   const router = useRouter();
   const [investOpen, setInvestOpen] = useState(false);
   const [sellOpen, setSellOpen] = useState(false);
@@ -642,7 +688,9 @@ export function InvestSheet({ meme, open, onClose, onDone }: { meme: MemeView; o
       const r = await api<{ invested: number }>(`/api/memes/${meme.id}/invest`, { json: { amount: eff, client_id: `sheet-${Date.now()}` } });
       setDone(r.invested);
       playSfx("cash");
-      // let any listening page (home, reels) refetch counts immediately
+      mutateMemeLocally(meme.id, {
+        total_invested: (meme.total_invested || 0) + eff,
+      });
       if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("aura:traded"));
       await refresh();
       onDone?.();
@@ -674,8 +722,12 @@ export function InvestSheet({ meme, open, onClose, onDone }: { meme: MemeView; o
               {meme.media_type === "text"
                 ? <TextThumb meme={meme} className="w-14 h-14" />
                 : (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={meme.thumbnail_url} alt="" className="w-14 h-14 rounded-2xl object-cover" />
+                  meme.thumbnail_url?.match(/\.(mp4|webm|mov|m4v)(\?.*)?$/i)
+                    ? <video src={`${meme.thumbnail_url}#t=0.001`} muted playsInline preload="metadata" className="w-14 h-14 rounded-2xl object-cover pointer-events-none" />
+                    : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={meme.thumbnail_url} alt="" className="w-14 h-14 rounded-2xl object-cover" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                    )
                 )}
             </div>
           </div>
@@ -822,14 +874,20 @@ export function CommentSection({ memeId, initial }: { memeId: string; initial: A
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {
-    if (!text.trim()) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
     setBusy(true);
+    setText("");
     try {
-      const r = await api<{ comment: typeof comments[number] }>(`/api/memes/${memeId}/comments`, { json: { content: text } });
-      setComments((c) => [...c, r.comment]);
-      setText("");
+      const r = await api<{ comment: typeof comments[number] }>(`/api/memes/${memeId}/comments`, { json: { content: trimmed } });
+      setComments((c) => {
+        const next = [...c, r.comment];
+        mutateMemeLocally(memeId, { comment_count: next.length });
+        return next;
+      });
     } catch (e) {
       toast((e as Error).message, "err");
+      setText(trimmed);
     } finally {
       setBusy(false);
     }

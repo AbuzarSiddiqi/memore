@@ -59,10 +59,12 @@ export default function MarketPage() {
             <span className="hd font-extrabold text-[15px] w-5 text-center muted">{i + 1}</span>
             {m.media_type === "text"
               ? <TextThumb meme={m} className="w-12 h-12" />
-              : (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={m.thumbnail_url} alt="" className="w-12 h-12 rounded-xl object-cover border border-[var(--line)]" loading="lazy" />
-              )}
+              : m.thumbnail_url?.match(/\.(mp4|webm|mov|m4v)(\?.*)?$/i)
+                ? <video src={`${m.thumbnail_url}#t=0.001`} muted playsInline preload="metadata" className="w-12 h-12 rounded-xl object-cover border border-[var(--line)] pointer-events-none" />
+                : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={m.thumbnail_url} alt="" className="w-12 h-12 rounded-xl object-cover border border-[var(--line)]" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                )}
             <div className="flex-1 min-w-0">
               <div className="text-[14px] font-bold truncate">{m.caption}</div>
               <div className="flex items-center gap-1.5 mt-0.5">

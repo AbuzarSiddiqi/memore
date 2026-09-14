@@ -78,8 +78,14 @@ export interface Meme {
   source_url: string | null;
   source_handle: string | null;
   dna: MemeDNA;
+  mentions?: MentionRef[];
   created_at: string;
   updated_at: string;
+}
+
+export interface MentionRef {
+  user_id: string;
+  username: string;
 }
 
 export interface Holding {
@@ -191,6 +197,7 @@ export type NotificationType =
   | "battle_win"
   | "achievement"
   | "comment"
+  | "mention"
   | "call_won"
   | "call_lost"
   | "mission";
@@ -244,6 +251,13 @@ export interface UserAchievement {
   unlocked_at: string;
 }
 
+export interface PostMention {
+  id: string;
+  post_id: string;
+  mentioned_user_id: string;
+  created_at: string;
+}
+
 export interface DB {
   users: Profile[];
   memes: Meme[];
@@ -262,6 +276,7 @@ export interface DB {
   chats: ChatConversation[];
   chat_messages: ChatMessage[];
   message_reactions: MessageReaction[];
+  post_mentions?: PostMention[];
   achievements: Achievement[];
   user_achievements: UserAchievement[];
   user_daily: UserDaily[];

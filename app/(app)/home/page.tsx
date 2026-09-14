@@ -140,13 +140,29 @@ export default function HomePage() {
   const memes = Array.from(new Map(pages.flat().map((m) => [m.id, m])).values());
   const refresh = useCallback(() => { loadPage(0, tab, true); loadMissions(); }, [tab, loadPage, loadMissions]);
 
-  // realtime counts: any invest/sell anywhere (double-tap, sheets) refetches the
-  // feed so the ✦ totals on the rail buttons stay live.
+  // realtime counts: patch mutated meme in local feed state immediately with 0 DB queries
   useEffect(() => {
-    const onTraded = () => { setTimeout(() => refresh(), 500); };
-    window.addEventListener("aura:traded", onTraded);
-    return () => window.removeEventListener("aura:traded", onTraded);
-  }, [refresh]);
+    const onMutated = (e: CustomEvent<{ memeId: string; patch: any }>) => {
+      if (!e.detail?.memeId || !e.detail?.patch) return;
+      const { memeId, patch } = e.detail;
+      setPages((prevPages) =>
+        prevPages.map((pageList) =>
+          pageList.map((m) => {
+            if (m.id !== memeId) return m;
+            return {
+              ...m,
+              ...patch,
+              total_invested: patch.total_invested !== undefined ? Math.max(m.total_invested ?? 0, patch.total_invested) : m.total_invested,
+              comment_count: patch.comment_count !== undefined ? Math.max(m.comment_count ?? 0, patch.comment_count) : m.comment_count,
+              saves: patch.saves !== undefined ? patch.saves : m.saves,
+            };
+          })
+        )
+      );
+    };
+    window.addEventListener("memore:post-mutated", onMutated as EventListener);
+    return () => window.removeEventListener("memore:post-mutated", onMutated as EventListener);
+  }, []);
 
   const doneMissions = missions.filter((m) => m.done).length;
 

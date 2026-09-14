@@ -48,10 +48,12 @@ export default function HunterPage() {
           <Link key={m.id} href={`/meme/${m.id}`} className="neo-sm p-2.5 flex items-center gap-3 hover:border-[var(--lime)] transition-colors">
             {m.media_type === "text"
               ? <TextThumb meme={m} className="w-[52px] h-[52px]" />
-              : (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={m.thumbnail_url} alt="" className="w-[52px] h-[52px] rounded-xl object-cover" loading="lazy" />
-              )}
+              : m.thumbnail_url?.match(/\.(mp4|webm|mov|m4v)(\?.*)?$/i)
+                ? <video src={`${m.thumbnail_url}#t=0.001`} muted playsInline preload="metadata" className="w-[52px] h-[52px] rounded-xl object-cover pointer-events-none" />
+                : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={m.thumbnail_url} alt="" className="w-[52px] h-[52px] rounded-xl object-cover" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                )}
             <div className="flex-1 min-w-0">
               <div className="text-[13.5px] font-bold truncate">{m.caption}</div>
               <div className="text-[11px] muted mt-0.5">{fmtNum(m.views)} views · {m.investor_count} investors</div>

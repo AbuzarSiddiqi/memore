@@ -10,6 +10,7 @@ import { EmptyState, NeoCard, Skeleton } from "@/components/ui";
 const ICONS: Record<string, string> = {
   invest_made: "✦", pick_up: "🚀", pick_down: "📉", trending: "🔥",
   remix: "🔄", follow: "👤", battle_win: "⚔️", achievement: "🏆", comment: "💬",
+  mention: "🏷️",
 };
 
 export default function NotificationsPage() {

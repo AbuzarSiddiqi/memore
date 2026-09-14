@@ -7,9 +7,9 @@ import { eventAndSeason } from "@/lib/server/feed";
 import { pushNotification, checkAchievements } from "@/lib/server/notify";
 import { trackMission } from "@/lib/server/progression";
 import { priceFromNet } from "@/lib/server/market";
-import { shouldAttemptTextTableSync, noteTextTableSyncResult, invalidateSnapshotTextCache } from "@/lib/server/sync";
+import { shouldAttemptTextTableSync, noteTextTableSyncResult, invalidateSnapshotTextCache, toCanonicalUuid } from "@/lib/server/sync";
 import { TEXT_POST_LIMIT, TEXT_POST_MIN } from "@/lib/limits";
-import { oneLine, parseHashtags } from "@/lib/text";
+import { oneLine, parseHashtags, parseMentions } from "@/lib/text";
 import type { Meme } from "@/lib/types";
 
 const TABS: FeedTab[] = ["foryou", "following", "trending", "new", "rising", "undervalued", "hunter", "chaos", "saved", "mix"];
@@ -75,6 +75,35 @@ export async function POST(req: NextRequest) {
       if (!parent) return fail("The meme you're remixing is no longer available.");
     }
 
+    // Server-side authoritative mention validation: never trust client blindly
+    const rawMentions = Array.isArray(body.mentions) ? body.mentions : [];
+    const textMentions = parseMentions(caption).map((m) => m.toLowerCase());
+    const validMentions: Array<{ user_id: string; username: string }> = [];
+    const mentionedUserIds = new Set<string>();
+
+    if (textMentions.length > 0 && rawMentions.length > 0) {
+      for (const rm of rawMentions) {
+        const uId = String(rm.userId || rm.user_id || "").trim();
+        const uName = String(rm.username || "").trim().toLowerCase();
+        if (!uId || !uName) continue;
+        if (!textMentions.includes(uName)) continue;
+        const canonUid = toCanonicalUuid(uId);
+        const targetUser = d.users.find(
+          (u) =>
+            (u.id === uId || toCanonicalUuid(u.id) === canonUid) &&
+            u.username.toLowerCase() === uName &&
+            !u.suspended
+        );
+        if (targetUser && !mentionedUserIds.has(targetUser.id)) {
+          mentionedUserIds.add(targetUser.id);
+          validMentions.push({
+            user_id: targetUser.id,
+            username: targetUser.username,
+          });
+        }
+      }
+    }
+
     const jitter = () => 55 + Math.floor(Math.random() * 25);
     const meme: Meme = {
       id: `m_${uid().slice(0, 8)}`, creator_id: user.id, caption,
@@ -92,10 +121,32 @@ export async function POST(req: NextRequest) {
         relatability: jitter(), brainrot: jitter(),
         wholesome: jitter(), absurdity: jitter(),
       },
+      mentions: validMentions,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     };
     meme.current_price = priceFromNet(0);
     d.memes.unshift(meme);
+
+    if (validMentions.length > 0) {
+      if (!d.post_mentions) d.post_mentions = [];
+      for (const vm of validMentions) {
+        d.post_mentions.push({
+          id: `pm_${meme.id}_${vm.user_id}`,
+          post_id: meme.id,
+          mentioned_user_id: vm.user_id,
+          created_at: meme.created_at,
+        });
+        if (vm.user_id !== user.id) {
+          pushNotification(
+            vm.user_id,
+            "mention",
+            "🏷️ You were tagged in a post",
+            `@${user.username} tagged you in a post: "${oneLine(caption, 60)}"`,
+            meme.id
+          );
+        }
+      }
+    }
 
     if (parent) {
       d.remixes.push({ id: uid(), original_meme_id: parent.id, remix_meme_id: meme.id, creator_id: user.id, created_at: meme.created_at });
@@ -200,6 +251,22 @@ export async function POST(req: NextRequest) {
         }
 
         invalidateSnapshotTextCache();
+
+        if (validMentions.length > 0) {
+          for (const vm of validMentions) {
+            try {
+              await admin.from("post_mentions").upsert({
+                id: `pm_${meme.id}_${vm.user_id}`,
+                post_id: meme.id,
+                mentioned_user_id: toCanonicalUuid(vm.user_id),
+                created_at: meme.created_at,
+              }, { onConflict: "post_id,mentioned_user_id" });
+            } catch {
+              // Table may not yet be migrated in Supabase
+            }
+          }
+        }
+
         // Ensure in-memory state and cloud state are immediately synchronized
         await ensureHydrated(true);
       }

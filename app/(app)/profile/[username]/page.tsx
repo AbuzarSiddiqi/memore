@@ -256,6 +256,8 @@ export default function ProfilePage({ params }: { params: Promise<{ username: st
                 <Link key={m.id} href={`/meme/${m.id}`} className="relative rounded-xl overflow-hidden border border-[var(--line)] group">
                   {m.media_type === "text" ? (
                     <TextTile meme={m} className="w-full aspect-square group-hover:opacity-80 transition-opacity" />
+                  ) : m.thumbnail_url?.match(/\.(mp4|webm|mov|m4v)(\?.*)?$/i) ? (
+                    <video src={`${m.thumbnail_url}#t=0.001`} muted playsInline preload="metadata" className="w-full aspect-square object-cover group-hover:opacity-80 transition-opacity pointer-events-none" />
                   ) : (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={m.thumbnail_url} alt={m.caption} className="w-full aspect-square object-cover group-hover:opacity-80 transition-opacity" loading="lazy" />

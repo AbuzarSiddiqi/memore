@@ -13,9 +13,10 @@ const TEMPLATES = ["img-002", "img-013", "img-016", "img-023", "img-024", "img-0
 
 type Upload = { url: string; thumbnail_url?: string; media_type: "image" | "video"; width?: number; height?: number; duration?: number };
 
-async function uploadFile(file: File): Promise<Upload> {
+async function uploadFile(file: File, poster?: Blob | null): Promise<Upload> {
   const form = new FormData();
   form.append("file", file);
+  if (poster) form.append("poster", poster, "poster.jpg");
   const res = await fetch("/api/upload", { method: "POST", body: form });
   let data: any = null;
   try {
@@ -97,15 +98,50 @@ function Studio({ remixId, remixCategory }: { remixId: string | null; remixCateg
     setBusy(true);
     try {
       if (file.type.startsWith("video")) {
-        const duration = await new Promise<number>((resolve, reject) => {
+        const { duration, posterBlob } = await new Promise<{ duration: number; posterBlob: Blob | null }>((resolve, reject) => {
           const v = document.createElement("video");
-          v.preload = "metadata";
-          v.onloadedmetadata = () => resolve(v.duration);
-          v.onerror = () => reject(new Error("That video couldn't be read."));
-          v.src = URL.createObjectURL(file);
+          v.preload = "auto";
+          v.muted = true;
+          v.playsInline = true;
+          const objectUrl = URL.createObjectURL(file);
+          v.src = objectUrl;
+
+          let done = false;
+          const finish = (blob: Blob | null) => {
+            if (done) return;
+            done = true;
+            try { URL.revokeObjectURL(objectUrl); } catch {}
+            resolve({ duration: v.duration || 0, posterBlob: blob });
+          };
+
+          const extractFrame = () => {
+            try {
+              const canvas = document.createElement("canvas");
+              canvas.width = v.videoWidth || 720;
+              canvas.height = v.videoHeight || 1280;
+              const ctx = canvas.getContext("2d");
+              if (ctx) {
+                ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+                canvas.toBlob((blob) => finish(blob), "image/jpeg", 0.85);
+                return;
+              }
+            } catch {}
+            finish(null);
+          };
+
+          v.onloadedmetadata = () => {
+            v.currentTime = Math.min(0.5, Math.max(0, v.duration * 0.1));
+          };
+          v.onseeked = extractFrame;
+          v.onerror = () => {
+            try { URL.revokeObjectURL(objectUrl); } catch {}
+            reject(new Error("That video couldn't be read."));
+          };
+          // Fallback timeout in case seeked doesn't fire
+          setTimeout(() => finish(null), 3000);
         });
         if (duration > 90) throw new Error("Keep videos under 90 seconds. Memes are fast.");
-        const up = await uploadFile(file);
+        const up = await uploadFile(file, posterBlob);
         setVideoUrl(up.url);
         setVideoPoster(up.thumbnail_url || null);
         setVideoDuration(duration);

@@ -228,7 +228,11 @@ export default function ChatPage() {
   const [sharePost, setSharePost] = useState(false);
   const [investMeme, setInvestMeme] = useState<MemeView | null>(null);
   const [attach, setAttach] = useState(false);
-  const [kbH, setKbH] = useState(0);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [animatingMsgIds, setAnimatingMsgIds] = useState<Record<string, "zuup" | "receive" | "unsend" | "sticker">>({});
+  const [doubleTapBurst, setDoubleTapBurst] = useState<{ msgId: string; x: number; y: number } | null>(null);
+  const isNearBottomRef = useRef(true);
+  const initialScrollDone = useRef(false);
   const [reactTo, setReactTo] = useState<{ msgId: string; rect: DOMRect } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [favorites, setFavorites] = useState<string[]>(["aura", "w", "f", "cook", "dead"]);
@@ -370,28 +374,74 @@ export default function ChatPage() {
     }
   }, [detail, remaining, router]);
 
-  // Keep the composer above the keyboard: pin the screen to the visual
-  // viewport height while it's open, and keep the latest message in view.
+  // 1. Lock body/html scroll so background never rubber-bands or scrolls
   useEffect(() => {
-    const vv = window.visualViewport;
-    if (!vv) return;
-    const on = () => {
-      const overlap = window.innerHeight - vv.height;
-      setKbH(overlap > 140 ? overlap : 0);
-    };
-    vv.addEventListener("resize", on);
-    vv.addEventListener("scroll", on);
-    on();
+    const origBodyOverflow = document.body.style.overflow;
+    const origHtmlOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
     return () => {
-      vv.removeEventListener("resize", on);
-      vv.removeEventListener("scroll", on);
+      document.body.style.overflow = origBodyOverflow;
+      document.documentElement.style.overflow = origHtmlOverflow;
     };
   }, []);
 
+  // 2. Ensure window scroll is always 0 on mobile so the fixed header cannot shift
+  useEffect(() => {
+    const keepScrollZero = () => {
+      if (window.scrollY !== 0) {
+        window.scrollTo(0, 0);
+      }
+    };
+    window.addEventListener("scroll", keepScrollZero, { passive: true });
+    return () => window.removeEventListener("scroll", keepScrollZero);
+  }, []);
+
+  // 3. Track keyboard height from Visual Viewport API without moving the header
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const onViewport = () => {
+      const diff = window.innerHeight - vv.height;
+      setKeyboardHeight(diff > 120 ? diff : 0);
+    };
+    vv.addEventListener("resize", onViewport);
+    vv.addEventListener("scroll", onViewport);
+    onViewport();
+    return () => {
+      vv.removeEventListener("resize", onViewport);
+      vv.removeEventListener("scroll", onViewport);
+    };
+  }, []);
+
+  // 4. Track whether user is near bottom of conversation
+  const handleScroll = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const threshold = 140;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    isNearBottomRef.current = distanceFromBottom <= threshold;
+  }, []);
+
+  // 5. Preserve scroll position or keep newest messages in view if already at bottom
   useEffect(() => {
     const el = listRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [detail?.messages.length, kbH]);
+    if (!el) return;
+    if (isNearBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [detail?.messages.length, keyboardHeight]);
+
+  // 6. Initial scroll to bottom when messages first load
+  useEffect(() => {
+    if (detail?.messages && detail.messages.length > 0 && !initialScrollDone.current) {
+      const el = listRef.current;
+      if (el) {
+        el.scrollTop = el.scrollHeight;
+        initialScrollDone.current = true;
+      }
+    }
+  }, [detail?.messages]);
 
   // ----- reactions: HOLD → tray (R1 armed) → glide over slots → release applies -----
   const clearPress = useCallback(() => {
@@ -606,6 +656,8 @@ export default function ChatPage() {
             gestRef.current = null;
             try { navigator.vibrate?.(10); } catch {}
             const rid = favorites[0] ?? "aura";
+            setDoubleTapBurst({ msgId: m.id, x: g.x, y: g.y });
+            setTimeout(() => setDoubleTapBurst(null), 600);
             react(m.id, rid);
             return;
           }
@@ -694,19 +746,61 @@ export default function ChatPage() {
 
   const send = async (payload: { type: "text" | "image" | "video" | "post" | "sticker"; content?: string; media_url?: string; post_id?: string; sticker_id?: string; reply_to_message_id?: string }) => {
     setBusy(true);
+    const optId = `opt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const currentReply = replyTo;
+    const anim = payload.type === "sticker" ? "sticker" : "zuup";
+
+    // Optimistic outgoing message
+    const optimisticMsg: ChatMessageView = {
+      id: optId,
+      conversation_id: id,
+      sender_id: user?.id || "me",
+      type: payload.type,
+      content: payload.content || "",
+      post_id: payload.post_id ?? null,
+      media_url: payload.media_url ?? null,
+      post: null,
+      sticker_id: payload.sticker_id ?? null,
+      reply_to_message_id: payload.reply_to_message_id ?? currentReply?.id ?? null,
+      created_at: new Date().toISOString(),
+      seen: false,
+      reactions: [],
+      reply_to: currentReply ? { id: currentReply.id, sender_id: currentReply.sender_id, type: currentReply.type, content: currentReply.content, sticker_id: currentReply.sticker_id ?? null, post: currentReply.post ?? null } : null,
+    };
+
+    // 1. Mark animation for signature ZUUP
+    setAnimatingMsgIds((prev) => ({ ...prev, [optId]: anim }));
+    // 2. Play send SFX immediately (0ms non-blocking)
+    playSfx("send");
+    // 3. Clear reply state
+    setReplyTo(null);
+    // 4. Append optimistic message immediately
+    setDetail((prev) => (prev ? { ...prev, messages: [...prev.messages, optimisticMsg] } : prev));
+    // 5. Scroll to bottom
+    isNearBottomRef.current = true;
+    requestAnimationFrame(() => {
+      const el = listRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+
     try {
       const res = await api<{ message: ChatMessageView }>(`/api/chats/${id}/messages`, {
-        json: { ...payload, reply_to_message_id: payload.reply_to_message_id ?? replyTo?.id },
+        json: { ...payload, reply_to_message_id: payload.reply_to_message_id ?? currentReply?.id },
       });
-      setReplyTo(null);
       if (res?.message) {
-        playSfx("send");
+        setDetail((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            messages: prev.messages.map((m) => (m.id === optId ? res.message : m)),
+          };
+        });
         const updated = await appendCachedMessages(id, [res.message], detail?.conversation.expires_at);
         lastSyncCursorRef.current = res.message.created_at;
-        setDetail((prev) => (prev ? { ...prev, messages: updated } : prev));
       }
       await load();
     } catch (e) {
+      setDetail((prev) => (prev ? { ...prev, messages: prev.messages.filter((m) => m.id !== optId) } : prev));
       toast((e as Error).message, "err");
       if ((e as Error).message.includes("disappeared")) {
         setGone("expired");
@@ -714,6 +808,13 @@ export default function ChatPage() {
       }
     } finally {
       setBusy(false);
+      setTimeout(() => {
+        setAnimatingMsgIds((prev) => {
+          const next = { ...prev };
+          delete next[optId];
+          return next;
+        });
+      }, 350);
     }
   };
 
@@ -726,7 +827,14 @@ export default function ChatPage() {
     playSfx("unsend");
     setReactTo(null);
     setPickerOpen(false);
-    // Optimistic local delete
+
+    // 1. Play unsend shrink-and-poof animation
+    setAnimatingMsgIds((prev) => ({ ...prev, [msgId]: "unsend" }));
+
+    // 2. Wait 180ms for CSS animation to finish
+    await new Promise((r) => setTimeout(r, 180));
+
+    // 3. Remove from local state and cache
     setDetail((prev) => {
       if (!prev) return prev;
       return {
@@ -742,6 +850,12 @@ export default function ChatPage() {
     } catch (e) {
       toast((e as Error).message, "err");
       await load();
+    } finally {
+      setAnimatingMsgIds((prev) => {
+        const next = { ...prev };
+        delete next[msgId];
+        return next;
+      });
     }
   };
 
@@ -820,13 +934,18 @@ export default function ChatPage() {
 
   return (
     <div
-      className="chat-screen font-display fixed inset-0 z-[65] bg-[#0b0b0b] text-white flex flex-col"
-      style={{ paddingTop: "env(safe-area-inset-top, 0px)", height: kbH ? `calc(100% - ${kbH}px)` : undefined }}
+      className="chat-screen font-display fixed inset-0 z-[65] bg-[#0b0b0b] text-white flex flex-col overflow-hidden"
+      style={{
+        height: "100dvh",
+        maxHeight: "100dvh",
+        paddingTop: "env(safe-area-inset-top, 0px)",
+        overscrollBehavior: "none",
+      }}
     >
       <ScreenFrame />
       {clickShield && <div className="absolute inset-0 z-[80]" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} />}
 
-      {/* header */}
+      {/* header - stays fixed at top */}
       <header className="relative z-10 flex shrink-0 items-center gap-2.5 px-4 pt-3 pb-2">
         <button onClick={() => router.push("/messages")} aria-label="Back to Messages" className="shrink-0 text-white transition-transform active:scale-90">
           <Icon name="arrow-left" size={21} strokeWidth={2.4} />
@@ -855,7 +974,16 @@ export default function ChatPage() {
       <HeaderRule />
 
       {/* messages */}
-      <div ref={listRef} className="relative z-10 flex min-h-0 flex-1 flex-col overflow-y-auto no-scrollbar px-4 pb-2 pt-1">
+      <div
+        ref={listRef}
+        onScroll={handleScroll}
+        className="relative z-10 flex min-h-0 flex-1 flex-col overflow-y-auto no-scrollbar px-4 pb-2 pt-1"
+        style={{
+          overscrollBehavior: "contain",
+          WebkitOverflowScrolling: "touch",
+          touchAction: "pan-y",
+        }}
+      >
         {/* mt-auto hugs the composer when the thread is short, scrolls normally when it grows */}
         <div className="mt-auto flex flex-col space-y-3">
           {blocks.map((b, bi) =>
@@ -877,10 +1005,12 @@ export default function ChatPage() {
                     const tail = mi === 0;
                     const gestures = msgGestures(m);
                     const selected = reactTo?.msgId === m.id ? "msg-selected" : "";
+                    const animKind = animatingMsgIds[m.id];
                     // shared posts live in their own card — never inside a bubble
                     if (m.type === "post" && m.post) {
+                      const postAnim = animKind === "zuup" ? "msg-anim-zuup" : animKind === "receive" ? "msg-anim-receive" : animKind === "unsend" ? "msg-anim-unsend" : "";
                       return (
-                        <div key={m.id} id={`chat-msg-${m.id}`} className={`flex flex-col ${b.run.mine ? "items-end" : "items-start"} ${flashId === m.id ? "msg-flash" : ""}`}>
+                        <div key={m.id} id={`chat-msg-${m.id}`} className={`flex flex-col ${b.run.mine ? "items-end" : "items-start"} ${flashId === m.id ? "msg-flash" : ""} ${postAnim}`}>
                           <div
                             className={`msg-press relative ${selected}`}
                             {...gestures}
@@ -888,6 +1018,14 @@ export default function ChatPage() {
                           >
                             {m.reply_to && <QuoteInline refr={m.reply_to} mine={b.run.mine} username={detail?.other.username ?? ""} onJump={() => jumpToMessage(m.reply_to!.id)} />}
                             <SharedBubble meme={m.post} onInvest={() => setInvestMeme(m.post!)} onShare={() => setShareMeme(m.post)} />
+                            {animKind === "zuup" && b.run.mine && (
+                              <span className="speed-stroke absolute -bottom-1 -right-3 text-[#C8FF3D] font-mono text-[11px] select-none pointer-events-none" aria-hidden>//</span>
+                            )}
+                            {doubleTapBurst?.msgId === m.id && (
+                              <span className="aura-burst-mini absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 pointer-events-none">
+                                <Spark size={28} color="#C8FF3D" />
+                              </span>
+                            )}
                             {swipe?.msgId === m.id && (
                               <span className={`absolute top-1/2 -translate-y-1/2 ${m.sender_id === user?.id ? "-left-9" : "-right-9"}`} style={{ opacity: Math.min(1, swipe.dx / REPLY_THRESHOLD) }} aria-hidden>
                                 <ReplyArrow mine={b.run.mine} />
@@ -904,8 +1042,9 @@ export default function ChatPage() {
                     }
                     // stickers are standalone visual messages — no bubble
                     if (m.type === "sticker" && m.sticker_id) {
+                      const stickerAnim = animKind === "sticker" || animKind === "zuup" ? "sticker-anim-pop" : animKind === "receive" ? "msg-anim-receive" : animKind === "unsend" ? "msg-anim-unsend" : "";
                       return (
-                        <div key={m.id} id={`chat-msg-${m.id}`} className={`flex flex-col ${b.run.mine ? "items-end" : "items-start"} ${flashId === m.id ? "msg-flash" : ""}`}>
+                        <div key={m.id} id={`chat-msg-${m.id}`} className={`flex flex-col ${b.run.mine ? "items-end" : "items-start"} ${flashId === m.id ? "msg-flash" : ""} ${stickerAnim}`}>
                           <div
                             className={`msg-press relative ${selected}`}
                             {...gestures}
@@ -913,6 +1052,11 @@ export default function ChatPage() {
                           >
                             {m.reply_to && <QuoteInline refr={m.reply_to} mine={b.run.mine} username={detail?.other.username ?? ""} onJump={() => jumpToMessage(m.reply_to!.id)} />}
                             <StickerArt id={m.sticker_id} size={136} />
+                            {doubleTapBurst?.msgId === m.id && (
+                              <span className="aura-burst-mini absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 pointer-events-none">
+                                <Spark size={28} color="#C8FF3D" />
+                              </span>
+                            )}
                             {swipe?.msgId === m.id && (
                               <span className={`absolute top-1/2 -translate-y-1/2 ${m.sender_id === user?.id ? "-left-9" : "-right-9"}`} style={{ opacity: Math.min(1, swipe.dx / REPLY_THRESHOLD) }} aria-hidden>
                                 <ReplyArrow mine={b.run.mine} />
@@ -927,8 +1071,9 @@ export default function ChatPage() {
                         </div>
                       );
                     }
+                    const bubbleAnim = animKind === "zuup" ? "msg-anim-zuup" : animKind === "receive" ? "msg-anim-receive" : animKind === "unsend" ? "msg-anim-unsend" : "";
                     return (
-                      <div key={m.id} id={`chat-msg-${m.id}`} className={`flex max-w-[92%] flex-col ${b.run.mine ? "self-end items-end" : "self-start items-start"} ${flashId === m.id ? "msg-flash" : ""}`}>
+                      <div key={m.id} id={`chat-msg-${m.id}`} className={`flex max-w-[92%] flex-col ${b.run.mine ? "self-end items-end" : "self-start items-start"} ${flashId === m.id ? "msg-flash" : ""} ${bubbleAnim}`}>
                         <div
                           className={`msg-press relative min-w-[92px] ${selected}`}
                           {...gestures}
@@ -936,6 +1081,14 @@ export default function ChatPage() {
                         >
                           <BubbleFrame mine={b.run.mine} tail={tail} />
                           <BubbleAccents mine={b.run.mine} seed={hashId(m.id)} tail={tail} />
+                          {animKind === "zuup" && b.run.mine && (
+                            <span className="speed-stroke absolute -bottom-1 -right-3 text-[#C8FF3D] font-mono text-[11px] select-none pointer-events-none" aria-hidden>//</span>
+                          )}
+                          {doubleTapBurst?.msgId === m.id && (
+                            <span className="aura-burst-mini absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 pointer-events-none">
+                              <Spark size={28} color="#C8FF3D" />
+                            </span>
+                          )}
                           <div className="relative px-3.5 py-2">
                             {m.reply_to && (
                               <button
@@ -994,7 +1147,12 @@ export default function ChatPage() {
       </div>
 
       {/* composer */}
-      <div className="relative z-20 shrink-0 px-3.5 pt-2" style={{ paddingBottom: "max(20px, calc(env(safe-area-inset-bottom) + 12px))" }}>
+      <div
+        className="relative z-20 shrink-0 px-3.5 pt-2"
+        style={{
+          paddingBottom: keyboardHeight > 0 ? "8px" : "max(16px, calc(env(safe-area-inset-bottom, 0px) + 8px))",
+        }}
+      >
         {attach && (
           <div className="absolute bottom-[calc(100%+6px)] left-3 right-3 z-30 space-y-0.5 rounded-[16px] border border-[#2a2a2a] bg-[#131313] p-1.5">
             <button className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-[15px] hover:bg-white/5" onClick={() => { setSharePost(true); setAttach(false); }}>
@@ -1009,7 +1167,7 @@ export default function ChatPage() {
           </div>
         )}
         {replyTo && (
-          <div className="mb-1.5 flex items-center gap-2 rounded-[14px] border border-[#7C4DFF]/70 bg-[#141020] px-3 py-1.5">
+          <div className="reply-bar-enter mb-1.5 flex items-center gap-2 rounded-[14px] border border-[#7C4DFF]/70 bg-[#141020] px-3 py-1.5">
             <svg viewBox="0 0 24 24" width={13} height={13} aria-hidden className="shrink-0">
               <path d="M9 5 L4 10 L9 15 M4 10 L13.5 10 C 17.8 10, 20 12.8, 20 17 L 20 19" fill="none" stroke="#C8FF3D" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" />
             </svg>
@@ -1066,6 +1224,15 @@ export default function ChatPage() {
           </button>
         </div>
       </div>
+
+      {/* keyboard spacer - shrinks only the bottom region when keyboard is open without moving the header */}
+      {keyboardHeight > 0 && (
+        <div
+          style={{ height: `${keyboardHeight}px` }}
+          className="shrink-0 pointer-events-none transition-[height] duration-100 ease-out"
+          aria-hidden
+        />
+      )}
 
       {reactTo && (
         <>

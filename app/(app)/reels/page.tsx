@@ -79,19 +79,47 @@ function CommentTicker({ memeId, active, refreshKey, onOpen }: { memeId: string;
 
 /** Same rail as the home feed: ✦ aura button first, then comments/share/remix/details. */
 function Rail({ meme, onComments, onInvest, onShare, dimmed }: { meme: MemeView; onComments: () => void; onInvest: () => void; onShare: () => void; dimmed?: boolean }) {
+  const [counts, setCounts] = useState({
+    invested: meme.total_invested ?? 0,
+    comments: meme.comment_count ?? 0,
+    saves: meme.saves ?? 0,
+  });
+
+  useEffect(() => {
+    setCounts((prev) => ({
+      invested: Math.max(prev.invested, meme.total_invested ?? 0),
+      comments: Math.max(prev.comments, meme.comment_count ?? 0),
+      saves: Math.max(prev.saves, meme.saves ?? 0),
+    }));
+  }, [meme.total_invested, meme.comment_count, meme.saves]);
+
+  useEffect(() => {
+    const onMutated = (e: CustomEvent<{ memeId: string; patch: any }>) => {
+      if (e.detail?.memeId === meme.id && e.detail?.patch) {
+        setCounts((c) => ({
+          invested: e.detail.patch.total_invested !== undefined ? Math.max(c.invested, e.detail.patch.total_invested) : c.invested,
+          comments: e.detail.patch.comment_count !== undefined ? Math.max(c.comments, e.detail.patch.comment_count) : c.comments,
+          saves: e.detail.patch.saves !== undefined ? e.detail.patch.saves : c.saves,
+        }));
+      }
+    };
+    window.addEventListener("memore:post-mutated", onMutated as EventListener);
+    return () => window.removeEventListener("memore:post-mutated", onMutated as EventListener);
+  }, [meme.id]);
+
   return (
     <div className={`absolute right-2.5 z-10 flex flex-col gap-2.5 items-center reel-fade ${dimmed ? "reel-hidden" : "reel-shown"}`} style={{ bottom: "max(112px, calc(env(safe-area-inset-bottom, 0px) + 112px))" }}>
       <button className={railBtn} onClick={(e) => { e.stopPropagation(); onInvest(); }} aria-label="Invest Aura in this meme">
         <Spark size={17} color="#C8FF3D" />
-        <span className={railNum} style={{ color: "#C8FF3D" }}>{fmtNum(meme.total_invested)}</span>
+        <span className={railNum} style={{ color: "#C8FF3D" }}>{fmtNum(counts.invested)}</span>
       </button>
       <button className={railBtn} onClick={(e) => { e.stopPropagation(); onComments(); }} aria-label="Comments">
         <Icon name="comment" size={17} strokeWidth={2.2} />
-        <span className={railNum}>{meme.comment_count}</span>
+        <span className={railNum}>{counts.comments}</span>
       </button>
       <button className={railBtn} onClick={(e) => { e.stopPropagation(); onShare(); }} aria-label="Share">
         <Icon name="share" size={17} strokeWidth={2.4} />
-        <span className={`${railNum} text-white`}>{meme.saves > 99 ? "99+" : meme.saves}</span>
+        <span className={`${railNum} text-white`}>{counts.saves > 99 ? "99+" : counts.saves}</span>
       </button>
       <Link href={`/create?remix=${meme.id}`} onClick={(e) => e.stopPropagation()} className={railBtn} aria-label="Remix">
         <Icon name="repeat" size={17} strokeWidth={2.2} />
@@ -604,14 +632,29 @@ function ReelsInner() {
   }, [data]);
 
   useEffect(() => {
-    const onTraded = () => { setTimeout(() => refresh(), 500); };
+    const onMutated = (e: CustomEvent<{ memeId: string; patch: any }>) => {
+      if (!e.detail?.memeId || !e.detail?.patch) return;
+      const { memeId, patch } = e.detail;
+      setCachedMemes((prev) =>
+        prev.map((m) => {
+          if (m.id !== memeId) return m;
+          return {
+            ...m,
+            ...patch,
+            total_invested: patch.total_invested !== undefined ? Math.max(m.total_invested ?? 0, patch.total_invested) : m.total_invested,
+            comment_count: patch.comment_count !== undefined ? Math.max(m.comment_count ?? 0, patch.comment_count) : m.comment_count,
+            saves: patch.saves !== undefined ? patch.saves : m.saves,
+          };
+        })
+      );
+    };
     const onVisible = () => {
       if (typeof document !== "undefined" && !document.hidden) refresh();
     };
-    window.addEventListener("aura:traded", onTraded);
+    window.addEventListener("memore:post-mutated", onMutated as EventListener);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
-      window.removeEventListener("aura:traded", onTraded);
+      window.removeEventListener("memore:post-mutated", onMutated as EventListener);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [refresh]);

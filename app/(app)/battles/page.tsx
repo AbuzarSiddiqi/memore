@@ -126,9 +126,11 @@ function BattleCard({ meme, side, staked, disabled, onStake }: {
         <div className="relative rounded-2xl overflow-hidden" style={{ outline: staked ? "3px solid var(--lime)" : "none", outlineOffset: 2 }}>
           {meme.media_type === "text" ? (
             <TextPostBody meme={meme} className="aspect-square overflow-hidden" />
+          ) : meme.thumbnail_url?.match(/\.(mp4|webm|mov|m4v)(\?.*)?$/i) ? (
+            <video src={`${meme.thumbnail_url}#t=0.001`} muted playsInline preload="metadata" className="w-full aspect-square object-cover pointer-events-none" />
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={meme.thumbnail_url} alt={meme.caption} className="w-full aspect-square object-cover" />
+            <img src={meme.thumbnail_url} alt={meme.caption} className="w-full aspect-square object-cover" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
           )}
         </div>
         <p className="text-[12.5px] font-bold mt-2 line-clamp-1 text-center">{meme.caption}</p>

@@ -23,14 +23,17 @@ export function isTextPost(m: { media_type?: string | null }): boolean {
 // Line breaks and paragraphs render structurally; #hashtags and @mentions
 // linkify. Text is emitted as React text nodes — user HTML is never parsed,
 // so XSS is impossible by construction. Selection stays enabled (spec 30).
+//
+// NOTE: Single capturing group in TOKEN ensures line.split(TOKEN) cleanly
+// partitions the string without nested capturing group duplication.
 
-const TOKEN = /(#([a-zA-Z0-9_]{1,30})|@([a-zA-Z0-9_]{3,30}))/g;
+const TOKEN = /(#[a-zA-Z0-9_]{1,30}|@[a-zA-Z0-9_]{1,30})/g;
 
-function renderLine(line: string) {
+function renderLine(line: string, validMentions?: Set<string>) {
   const parts = line.split(TOKEN);
   return parts.map((part, i) => {
     if (!part) return null;
-    if (i % 4 === 1 && part.startsWith("#")) {
+    if (part.startsWith("#")) {
       return (
         <Link
           key={i}
@@ -43,24 +46,38 @@ function renderLine(line: string) {
         </Link>
       );
     }
-    if (i % 4 === 1 && part.startsWith("@")) {
-      return (
-        <Link
-          key={i}
-          href={`/profile/${part.slice(1)}`}
-          className="text-[#b39aff] font-bold hover:underline"
-          onClick={(e) => e.stopPropagation()}
-          onDoubleClick={(e) => e.stopPropagation()}
-        >
-          {part}
-        </Link>
-      );
+    if (part.startsWith("@")) {
+      const username = part.slice(1).toLowerCase();
+      const isValid = !validMentions || validMentions.has(username);
+      if (isValid) {
+        return (
+          <Link
+            key={i}
+            href={`/profile/${username}`}
+            className="text-[#b39aff] font-bold hover:underline"
+            onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
+            {part}
+          </Link>
+        );
+      }
+      return <React.Fragment key={i}>{part}</React.Fragment>;
     }
     return <React.Fragment key={i}>{part}</React.Fragment>;
   });
 }
 
-export function RichText({ text, className = "" }: { text: string; className?: string }) {
+export function RichText({
+  text,
+  mentions,
+  className = "",
+}: {
+  text: string;
+  mentions?: Array<{ username: string; user_id?: string }>;
+  className?: string;
+}) {
+  const validSet = mentions ? new Set(mentions.map((m) => m.username.toLowerCase())) : undefined;
   const paragraphs = text.replace(/\r\n/g, "\n").split(/\n{2,}/);
   return (
     <div className={`whitespace-pre-wrap break-words ${className}`}>
@@ -68,7 +85,7 @@ export function RichText({ text, className = "" }: { text: string; className?: s
         <p key={i} className={i > 0 ? "mt-3.5" : undefined}>
           {p.split("\n").map((line, j, arr) => (
             <React.Fragment key={j}>
-              {renderLine(line)}
+              {renderLine(line, validSet)}
               {j < arr.length - 1 && <br />}
             </React.Fragment>
           ))}
@@ -119,7 +136,7 @@ export function TextPostBody({
   clamp = false,
   className = "",
 }: {
-  meme: Pick<MemeView, "id" | "caption" | "tags">;
+  meme: Pick<MemeView, "id" | "caption" | "tags"> & { mentions?: Array<{ username: string; user_id?: string }> };
   size?: "md" | "lg";
   clamp?: boolean;
   className?: string;
@@ -136,12 +153,12 @@ export function TextPostBody({
       <TextSticker id={meme.id} />
       {clamp ? (
         <div className="relative max-h-[19rem] overflow-hidden">
-          <RichText text={meme.caption} className={`font-display font-semibold text-white ${textCls}`} />
+          <RichText text={meme.caption} mentions={meme.mentions} className={`font-display font-semibold text-white ${textCls}`} />
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14" style={{ background: "linear-gradient(to bottom, transparent, #141414 82%)" }} aria-hidden />
           <div className="absolute right-0 -bottom-0.5 text-[10px] font-extrabold uppercase tracking-wider text-white/45">read full post ↓</div>
         </div>
       ) : (
-        <RichText text={meme.caption} className={`font-display font-semibold text-white ${textCls}`} />
+        <RichText text={meme.caption} mentions={meme.mentions} className={`font-display font-semibold text-white ${textCls}`} />
       )}
       {meme.tags.length > 0 && (
         <div className="flex gap-1.5 flex-wrap mt-4">

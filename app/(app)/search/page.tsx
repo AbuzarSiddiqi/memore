@@ -114,7 +114,9 @@ export default function SearchPage() {
                   <Link key={m.id} href={`/meme/${m.id}`} className="neo-sm p-3 flex items-center gap-3 bg-[var(--surface)]">
                     {m.media_type === "text"
                       ? <TextThumb meme={m} className="w-12 h-12" />
-                      : (
+                      : m.thumbnail_url?.match(/\.(mp4|webm|mov|m4v)(\?.*)?$/i) ? (
+                        <video src={`${m.thumbnail_url}#t=0.001`} muted playsInline preload="metadata" className="w-12 h-12 rounded-xl object-cover border-2 border-[var(--ink)] pointer-events-none" />
+                      ) : (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={m.thumbnail_url} alt="" className="w-12 h-12 rounded-xl object-cover border-2 border-[var(--ink)]" />
                       )}

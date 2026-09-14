@@ -217,10 +217,12 @@ export default function VaultPage() {
                   <Link href={`/meme/${h.meme.id}`}>
                     {h.meme.media_type === "text"
                       ? <TextThumb meme={h.meme} className="w-12 h-12" />
-                      : (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={h.meme.thumbnail_url} alt="" className="w-12 h-12 rounded-xl object-cover" />
-                      )}
+                      : h.meme.thumbnail_url?.match(/\.(mp4|webm|mov|m4v)(\?.*)?$/i)
+                        ? <video src={`${h.meme.thumbnail_url}#t=0.001`} muted playsInline preload="metadata" className="w-12 h-12 rounded-xl object-cover pointer-events-none" />
+                        : (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={h.meme.thumbnail_url} alt="" className="w-12 h-12 rounded-xl object-cover" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                        )}
                   </Link>
                   <div className="flex-1 min-w-0">
                     <Link href={`/meme/${h.meme.id}`} className="font-bold text-[13.5px] line-clamp-1 hover:underline">{h.meme.caption}</Link>

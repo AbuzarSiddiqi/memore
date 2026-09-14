@@ -8,9 +8,9 @@ import { usePathname, useRouter } from "next/navigation";
 import { api, useOfflineStatus, useSession, useToast } from "@/lib/client";
 import { seedPostToCaches } from "@/lib/client-cache";
 import { TEXT_POST_LIMIT, TEXT_DRAFT_KEY } from "@/lib/limits";
-import { oneLine } from "@/lib/text";
+import { oneLine, parseMentions } from "@/lib/text";
 import type { MemeView } from "@/lib/types";
-import { NeoButton, Sheet } from "./ui";
+import { Avatar, NeoButton, Sheet } from "./ui";
 import { Spark } from "./brand";
 
 const CATEGORIES = ["college", "gaming", "anime", "football", "programming", "bollywood", "technology", "workplace", "indian", "chaos"];
@@ -158,6 +158,18 @@ function useKeyboardLift(active: boolean) {
   return ref;
 }
 
+function getMentionQuery(text: string, cursorPos: number): { query: string; start: number; end: number } | null {
+  const textBeforeCursor = text.slice(0, cursorPos);
+  const match = textBeforeCursor.match(/(?:^|\s)@([a-zA-Z0-9_]*)$/);
+  if (!match) return null;
+  const query = match[1];
+  const atIndex = textBeforeCursor.lastIndexOf("@");
+  const textAfterCursor = text.slice(cursorPos);
+  const afterMatch = textAfterCursor.match(/^[a-zA-Z0-9_]*/);
+  const end = cursorPos + (afterMatch ? afterMatch[0].length : 0);
+  return { query, start: atIndex, end };
+}
+
 export function TextComposer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const toast = useToast();
   const router = useRouter();
@@ -171,6 +183,108 @@ export function TextComposer({ open, onClose }: { open: boolean; onClose: () => 
   const [draftNotice, setDraftNotice] = useState(false);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const liftRef = useKeyboardLift(open);
+
+  // Mention autocomplete state
+  const [mentionQuery, setMentionQuery] = useState<{ query: string; start: number; end: number } | null>(null);
+  const [suggestions, setSuggestions] = useState<Array<{ id: string; username: string; display_name: string; avatar_bg: string }>>([]);
+  const [activeSuggestionIdx, setActiveSuggestionIdx] = useState(0);
+  const [selectedMentions, setSelectedMentions] = useState<Map<string, { userId: string; username: string }>>(new Map());
+  const searchAbortRef = useRef<AbortController | null>(null);
+
+  // Debounced search for real database users when typing @mention
+  useEffect(() => {
+    if (!mentionQuery) {
+      setSuggestions([]);
+      return;
+    }
+    const controller = new AbortController();
+    searchAbortRef.current?.abort();
+    searchAbortRef.current = controller;
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/users/search?q=${encodeURIComponent(mentionQuery.query)}`, {
+          signal: controller.signal,
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (controller.signal.aborted) return;
+        if (Array.isArray(data.users)) {
+          setSuggestions(data.users);
+          setActiveSuggestionIdx(0);
+        }
+      } catch {
+        // Ignored if aborted
+      }
+    }, 140);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [mentionQuery?.query]);
+
+  const checkMentionAtCursor = (val: string, target?: HTMLTextAreaElement | null) => {
+    const el = target || taRef.current;
+    if (!el) return;
+    const pos = el.selectionStart ?? val.length;
+    const q = getMentionQuery(val, pos);
+    setMentionQuery(q);
+  };
+
+  const selectUser = (u: { id: string; username: string }) => {
+    if (!mentionQuery) return;
+    const before = text.slice(0, mentionQuery.start);
+    const after = text.slice(mentionQuery.end);
+    const replacement = `@${u.username} `;
+    const nextText = before + replacement + after;
+    setText(nextText);
+
+    setSelectedMentions((prev) => {
+      const next = new Map(prev);
+      next.set(u.username.toLowerCase(), { userId: u.id, username: u.username });
+      return next;
+    });
+
+    setSuggestions([]);
+    setMentionQuery(null);
+
+    const nextPos = mentionQuery.start + replacement.length;
+    requestAnimationFrame(() => {
+      if (taRef.current) {
+        taRef.current.focus();
+        taRef.current.setSelectionRange(nextPos, nextPos);
+      }
+    });
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (suggestions.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActiveSuggestionIdx((i) => (i + 1) % suggestions.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActiveSuggestionIdx((i) => (i - 1 + suggestions.length) % suggestions.length);
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        if (suggestions[activeSuggestionIdx]) {
+          e.preventDefault();
+          selectUser(suggestions[activeSuggestionIdx]);
+          return;
+        }
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSuggestions([]);
+        setMentionQuery(null);
+        return;
+      }
+    }
+  };
 
   // restore a local draft (offline saves / unpublished thoughts)
   useEffect(() => {
@@ -205,6 +319,17 @@ export function TextComposer({ open, onClose }: { open: boolean; onClose: () => 
     if (offline) return toast("You're offline — save a draft and publish when back online.", "err");
     setBusy(true);
     try {
+      // Validate mentioned users from state against text
+      const mentionedUsernames = parseMentions(trimmed);
+      const mentionsPayload: Array<{ userId: string; username: string }> = [];
+      for (const uname of mentionedUsernames) {
+        const lower = uname.toLowerCase();
+        if (selectedMentions.has(lower)) {
+          const m = selectedMentions.get(lower)!;
+          mentionsPayload.push({ userId: m.userId, username: m.username });
+        }
+      }
+
       // Server is authoritative: only after this succeeds does the post exist.
       const r = await api<{ meme: MemeView }>("/api/memes", {
         json: {
@@ -212,6 +337,7 @@ export function TextComposer({ open, onClose }: { open: boolean; onClose: () => 
           media_type: "text",
           category,
           tags: tags.split(/[,\s]+/).filter(Boolean),
+          mentions: mentionsPayload,
         },
       });
       clearDraft();
@@ -237,6 +363,9 @@ export function TextComposer({ open, onClose }: { open: boolean; onClose: () => 
     }
     setText("");
     setTags("");
+    setSuggestions([]);
+    setMentionQuery(null);
+    setSelectedMentions(new Map());
     setLaunched(null);
     setDraftNotice(false);
     onClose();
@@ -269,13 +398,60 @@ export function TextComposer({ open, onClose }: { open: boolean; onClose: () => 
             <p className="text-[12.5px] muted mb-3">Text-only post. Line breaks, #hashtags and @mentions work. No image needed.</p>
 
             <div className="relative">
+              {suggestions.length > 0 && (
+                <div
+                  className="absolute left-0 right-0 bottom-full mb-2 z-30 max-h-52 overflow-y-auto bg-[#181818] border-2 border-[#333] rounded-2xl shadow-[0_8px_28px_rgba(0,0,0,0.7)] p-1.5 anim-rise"
+                  style={{ backdropFilter: "blur(12px)" }}
+                >
+                  <div className="text-[10px] font-extrabold uppercase tracking-wider text-white/50 px-2.5 py-1 flex items-center justify-between border-b border-white/5 mb-1">
+                    <span>Tag a real user</span>
+                    <span className="text-[9px] text-[#b39aff]">✦ DATABASE</span>
+                  </div>
+                  <div className="space-y-0.5">
+                    {suggestions.map((u, idx) => {
+                      const isSelected = idx === activeSuggestionIdx;
+                      return (
+                        <button
+                          key={u.id}
+                          type="button"
+                          className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-left transition-colors ${
+                            isSelected
+                              ? "bg-[#7C4DFF]/30 border border-[#7C4DFF]"
+                              : "hover:bg-white/5 border border-transparent"
+                          }`}
+                          onPointerDown={(e) => {
+                            e.preventDefault();
+                            selectUser(u);
+                          }}
+                        >
+                          <Avatar name={u.display_name} bg={u.avatar_bg} username={u.username} size={28} />
+                          <div className="min-w-0 flex-1">
+                            <div className="font-bold text-[13px] text-white truncate flex items-center gap-1.5">
+                              <span>@{u.username}</span>
+                            </div>
+                            <div className="text-[11px] text-white/55 truncate">{u.display_name}</div>
+                          </div>
+                          <span className="text-xs text-[#C8FF3D] font-mono">✦</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <textarea
                 ref={taRef}
                 className="neo-input font-display !text-[16.5px] leading-relaxed min-h-[132px] resize-y"
                 placeholder={"Write something unhinged…\n\nbro said it was a small bug\nfour hours later: everything is on fire"}
                 value={text}
                 maxLength={TEXT_POST_LIMIT}
-                onChange={(e) => { setText(e.target.value); if (draftNotice) setDraftNotice(false); }}
+                onChange={(e) => {
+                  setText(e.target.value);
+                  checkMentionAtCursor(e.target.value, e.target);
+                  if (draftNotice) setDraftNotice(false);
+                }}
+                onKeyDown={handleKeyDown}
+                onKeyUp={(e) => checkMentionAtCursor(text, e.currentTarget)}
+                onClick={(e) => checkMentionAtCursor(text, e.currentTarget)}
                 aria-label="Text meme content"
                 autoFocus={typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches}
               />

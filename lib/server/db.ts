@@ -78,6 +78,13 @@ export function normalizeDbUuids(d: DB) {
       sm.user_id = toCanonicalUuid(sm.user_id);
     }
   }
+  if (!d.post_mentions) {
+    d.post_mentions = [];
+  } else {
+    for (const pm of d.post_mentions) {
+      pm.mentioned_user_id = toCanonicalUuid(pm.mentioned_user_id);
+    }
+  }
 }
 
 export function resetToEmpty(): DB {
@@ -171,9 +178,22 @@ function mergeCloudDbIntoState(s: DB, cloudDb: DB) {
   // Authoritative memes directly from Supabase PostgreSQL (ordered newest first).
   // Text memes may exist only in the local store / Storage snapshot (table schema
   // dependent) — never drop them during a cloud merge.
+  // Merge memes while preserving local optimistic metrics (views, saves, total_invested)
+  const localMemesMap = new Map(s.memes.map((m) => [m.id, m]));
+  const mergedMemes = cloudDb.memes.map((cm) => {
+    const lm = localMemesMap.get(cm.id);
+    if (!lm) return cm;
+    return {
+      ...cm,
+      views: Math.max(cm.views || 0, lm.views || 0),
+      saves: Math.max(cm.saves || 0, lm.saves || 0),
+      total_invested: Math.max(cm.total_invested || 0, lm.total_invested || 0),
+      current_price: lm.current_price || cm.current_price,
+    };
+  });
   const cloudIds = new Set(cloudDb.memes.map((m) => m.id));
-  const localTextMemes = s.memes.filter((m) => m.media_type === "text" && !cloudIds.has(m.id));
-  s.memes = [...localTextMemes, ...cloudDb.memes].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const localOnlyMemes = s.memes.filter((m) => !cloudIds.has(m.id));
+  s.memes = [...localOnlyMemes, ...mergedMemes].sort((a, b) => b.created_at.localeCompare(a.created_at));
 
   // Merge users/profiles
   for (const cu of cloudDb.users) {
@@ -186,9 +206,29 @@ function mergeCloudDbIntoState(s: DB, cloudDb: DB) {
     }
   }
 
-  if (cloudDb.holdings?.length) s.holdings = cloudDb.holdings;
-  if (cloudDb.transactions?.length) s.transactions = cloudDb.transactions;
-  if (cloudDb.comments?.length) s.comments = cloudDb.comments;
+  // Merge holdings without dropping recently added local holdings
+  if (cloudDb.holdings?.length) {
+    const holdingMap = new Map<string, typeof s.holdings[0]>();
+    for (const h of s.holdings || []) holdingMap.set(h.id || `${h.user_id}:${h.meme_id}`, h);
+    for (const h of cloudDb.holdings) holdingMap.set(h.id || `${h.user_id}:${h.meme_id}`, h);
+    s.holdings = Array.from(holdingMap.values());
+  }
+
+  // Merge transactions without dropping recently added local transactions
+  if (cloudDb.transactions?.length) {
+    const txMap = new Map<string, typeof s.transactions[0]>();
+    for (const t of s.transactions || []) txMap.set(t.id, t);
+    for (const t of cloudDb.transactions) txMap.set(t.id, t);
+    s.transactions = Array.from(txMap.values()).sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 500);
+  }
+
+  // Merge comments without dropping recently added local comments
+  if (cloudDb.comments?.length) {
+    const commentMap = new Map<string, typeof s.comments[0]>();
+    for (const c of s.comments || []) commentMap.set(c.id, c);
+    for (const c of cloudDb.comments) commentMap.set(c.id, c);
+    s.comments = Array.from(commentMap.values());
+  }
 
   // Merge follows (authoritative from Supabase)
   if (cloudDb.follows) {

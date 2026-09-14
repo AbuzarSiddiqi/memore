@@ -4,7 +4,7 @@ import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, fmtAura, fmtNum, fmtPct, timeAgo, useApi, useSession, useToast } from "@/lib/client";
-import { getCachedMeme, setCachedMeme } from "@/lib/client-cache";
+import { getCachedMeme, mutateMemeLocally, setCachedMeme } from "@/lib/client-cache";
 import type { MemeView, PublicUser, PricePoint } from "@/lib/types";
 import { AreaChart } from "@/components/charts";
 import { Avatar, ChangePct, NeoButton, NeoCard, SectionTitle, Skeleton } from "@/components/ui";
@@ -58,7 +58,29 @@ export default function MemeDetail({ params }: { params: Promise<{ id: string }>
     }
   }, [data?.meme, id]);
 
-  const m = data?.meme ?? cachedMeme;
+  // Realtime optimistic updates without refetching from server
+  useEffect(() => {
+    const onMutated = (e: CustomEvent<{ memeId: string; patch: any }>) => {
+      if (e.detail?.memeId === id && e.detail?.patch) {
+        setCachedMemeState((prev) => {
+          if (!prev) return prev;
+          const patch = e.detail.patch;
+          return {
+            ...prev,
+            ...patch,
+            total_invested: patch.total_invested !== undefined ? Math.max(prev.total_invested ?? 0, patch.total_invested) : prev.total_invested,
+            comment_count: patch.comment_count !== undefined ? Math.max(prev.comment_count ?? 0, patch.comment_count) : prev.comment_count,
+            saves: patch.saves !== undefined ? patch.saves : prev.saves,
+          };
+        });
+      }
+    };
+    window.addEventListener("memore:post-mutated", onMutated as EventListener);
+    return () => window.removeEventListener("memore:post-mutated", onMutated as EventListener);
+  }, [id]);
+
+  const baseMeme = data?.meme ?? cachedMeme;
+  const m = baseMeme && cachedMeme && baseMeme.id === cachedMeme.id ? { ...baseMeme, ...cachedMeme } : baseMeme;
 
   if (loading && !m) {
     return (
@@ -90,9 +112,20 @@ export default function MemeDetail({ params }: { params: Promise<{ id: string }>
 
   const save = async () => {
     if (!user) return toast("Log in first.", "err");
-    const r = await api<{ saved: boolean }>(`/api/memes/${m.id}/save`, { method: "POST" });
-    setSaved(r.saved);
-    toast(r.saved ? "Saved to your watchlist." : "Removed.", "ok");
+    const nextSaved = !isSaved;
+    const nextSaves = Math.max(0, (m.saves || 0) + (nextSaved ? 1 : -1));
+    setSaved(nextSaved);
+    mutateMemeLocally(m.id, { is_saved: nextSaved, saves: nextSaves });
+    try {
+      const r = await api<{ saved: boolean }>(`/api/memes/${m.id}/save`, { method: "POST" });
+      setSaved(r.saved);
+      mutateMemeLocally(m.id, { is_saved: r.saved });
+      toast(r.saved ? "Saved to your watchlist." : "Removed.", "ok");
+    } catch (e) {
+      setSaved(!nextSaved);
+      mutateMemeLocally(m.id, { is_saved: !nextSaved, saves: m.saves });
+      toast((e as Error).message, "err");
+    }
   };
 
   const railBtn = "neo-btn icon !bg-black/55 !border-0 backdrop-blur-sm flex-col !w-11 !h-11 gap-0";
@@ -320,7 +353,9 @@ export default function MemeDetail({ params }: { params: Promise<{ id: string }>
               <Link key={s.id} href={`/meme/${s.id}`} className="neo-sm p-2 text-center hover:border-[var(--lime)] transition-colors">
                 {s.media_type === "text"
                   ? <TextThumb meme={s} className="w-full h-20" />
-                  : (
+                  : s.thumbnail_url?.match(/\.(mp4|webm|mov|m4v)(\?.*)?$/i) ? (
+                    <video src={`${s.thumbnail_url}#t=0.001`} muted playsInline preload="metadata" className="w-full h-20 object-cover rounded-lg pointer-events-none" />
+                  ) : (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={s.thumbnail_url} alt="" className="w-full h-20 object-cover rounded-lg" loading="lazy" />
                   )}
@@ -440,7 +475,9 @@ function EvolutionNode({ meme, tag }: { meme: MemeView; tag: string }) {
     <Link href={`/meme/${meme.id}`} className="neo-sm p-2 w-28 text-center hover:border-[var(--lime)] transition-colors">
       {meme.media_type === "text"
         ? <TextThumb meme={meme} className="w-full h-20" />
-        : (
+        : meme.thumbnail_url?.match(/\.(mp4|webm|mov|m4v)(\?.*)?$/i) ? (
+          <video src={`${meme.thumbnail_url}#t=0.001`} muted playsInline preload="metadata" className="w-full h-20 object-cover rounded-lg pointer-events-none" />
+        ) : (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={meme.thumbnail_url} alt="" className="w-full h-20 object-cover rounded-lg" loading="lazy" />
         )}
