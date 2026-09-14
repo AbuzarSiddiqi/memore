@@ -87,19 +87,25 @@
 }
 
 /* MEMORE Chat Window — flex column container mapped to visual viewport */
+html:has(.chat-screen),
+body:has(.chat-screen) {
+  position: fixed !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+  -webkit-overflow-scrolling: auto;
+}
+
 .chat-screen {
   position: fixed;
+  top: 0;
   left: 0;
   right: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   overscroll-behavior: none;
-}
-
-body:has(.chat-screen) {
-  overflow: hidden !important;
-  overscroll-behavior: none !important;
 }
 
 /* Chat Screen Frame: lives INSIDE the chat root (absolute), so it follows the

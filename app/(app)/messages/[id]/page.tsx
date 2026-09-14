@@ -563,8 +563,8 @@ export default function ChatPage() {
   }, []);
 
   // Visual Viewport synchronization:
-  // Pins ChatRoot top to vv.offsetTop (so header stays STICKED at top of visible screen)
-  // and height to vv.height (so composer stays glued directly above keyboard).
+  // Dynamically tracks keyboard height without shaking or layout thrashing.
+  // The header remains permanently locked at top: 0px.
   useEffect(() => {
     const el = screenRef.current;
     if (!el) return;
@@ -576,17 +576,10 @@ export default function ChatPage() {
         const vv = window.visualViewport;
         if (!vv) {
           el.style.height = "100dvh";
-          el.style.top = "0px";
           return;
         }
 
-        // Prevent iOS window panning from scrolling the document
-        if (window.scrollY !== 0) {
-          window.scrollTo(0, 0);
-        }
-
         el.style.height = `${vv.height}px`;
-        el.style.top = `${vv.offsetTop}px`;
 
         if (isNearBottomRef.current && listRef.current) {
           listRef.current.scrollTop = listRef.current.scrollHeight;
@@ -598,16 +591,12 @@ export default function ChatPage() {
 
     const vv = window.visualViewport;
     vv?.addEventListener("resize", syncViewport);
-    vv?.addEventListener("scroll", syncViewport);
     window.addEventListener("resize", syncViewport);
-    window.addEventListener("scroll", syncViewport, { passive: true });
 
     return () => {
       cancelAnimationFrame(rafId);
       vv?.removeEventListener("resize", syncViewport);
-      vv?.removeEventListener("scroll", syncViewport);
       window.removeEventListener("resize", syncViewport);
-      window.removeEventListener("scroll", syncViewport);
     };
   }, []);
 
@@ -1416,7 +1405,15 @@ export default function ChatPage() {
             </button>
           </div>
         )}
-        <div className="flex items-end gap-2.5">
+        <div
+          className="flex items-end gap-2"
+          onPointerDown={(e) => {
+            // Prevent tapping empty composer gaps/background from blurring textarea and turning off keyboard
+            if ((e.target as HTMLElement).tagName !== "TEXTAREA" && (e.target as HTMLElement).tagName !== "INPUT") {
+              e.preventDefault();
+            }
+          }}
+        >
           <button onClick={() => setAttach((a) => !a)} aria-label="Attach" className="relative flex h-[42px] w-[42px] shrink-0 items-center justify-center text-white/90 transition-transform active:scale-90">
             <WobblyCircle fill="#101010" stroke="#7C4DFF" />
             <span className="relative"><Icon name="plus" size={19} strokeWidth={2.6} /></span>
@@ -1477,7 +1474,7 @@ export default function ChatPage() {
           <button
             type="button"
             aria-label="Send message"
-            className="relative flex h-[42px] w-[42px] shrink-0 items-center justify-center text-[#0a0a0a] transition-transform active:scale-90"
+            className="relative flex h-[48px] w-[48px] shrink-0 items-center justify-center text-[#0a0a0a] transition-transform active:scale-95 before:absolute before:-inset-2 before:content-['']"
             onPointerDown={(e) => {
               // CRITICAL: preventDefault prevents iOS from blurring the textarea!
               // Keyboard stays open and message sends immediately on first tap.
@@ -1490,7 +1487,7 @@ export default function ChatPage() {
             }}
           >
             <WobblyCircle fill="#C8FF3D" stroke="rgba(10,10,10,0.7)" />
-            <span className="relative"><Icon name="arrow-right" size={20} strokeWidth={2.6} /></span>
+            <span className="relative"><Icon name="arrow-right" size={23} strokeWidth={2.8} /></span>
           </button>
         </div>
       </div>
