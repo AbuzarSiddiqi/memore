@@ -52,15 +52,9 @@ function hashId(id: string): number {
 }
 
 /** Barely-there screen edge: one thin line that hugs the physical device corners.
- * Stays completely still at the outer corners and never shifts or shrinks with the keyboard. */
-function ScreenFrame({ frameRef }: { frameRef: React.RefObject<HTMLDivElement | null> }) {
-  return (
-    <div
-      ref={frameRef}
-      className="chat-screen-frame pointer-events-none fixed z-[68]"
-      aria-hidden
-    />
-  );
+ * Pure CSS — it never shifts or shrinks with the keyboard. */
+function ScreenFrame() {
+  return <div className="chat-screen-frame pointer-events-none fixed z-[68]" aria-hidden />;
 }
 
 /** One thin, slightly imperfect purple line under the header. */
@@ -228,8 +222,7 @@ export default function ChatPage() {
   const [investMeme, setInvestMeme] = useState<MemeView | null>(null);
   const [attach, setAttach] = useState(false);
   const screenRef = useRef<HTMLDivElement | null>(null);
-  const frameRef = useRef<HTMLDivElement | null>(null);
-  const initialScreenHeightRef = useRef<number>(0);
+  const vvMaxRef = useRef(0); // tallest the visual viewport has been while idle — the keyboard signal
   const [animatingMsgIds, setAnimatingMsgIds] = useState<Record<string, "zuup" | "receive" | "unsend" | "sticker">>({});
   const [doubleTapBurst, setDoubleTapBurst] = useState<{ msgId: string; x: number; y: number } | null>(null);
   const isNearBottomRef = useRef(true);
@@ -401,75 +394,47 @@ export default function ChatPage() {
     };
   }, []);
 
-  // 2. Synchronize chat viewport with Visual Viewport API (Direct DOM: 0 React setState)
+  // 2. Keyboard handling. The chat root is a fixed flex column anchored to the
+  // TOP of the layout viewport — the header never moves. The only thing JS
+  // drives is `--chat-bottom`: the keyboard's overlap with the layout viewport.
+  // With `interactiveWidget: resizes-content` (Android, iOS 16.4+/26) the
+  // layout viewport already shrinks by the keyboard, so innerHeight - vv.height
+  // is 0 and CSS does all the work; on older iOS the layout viewport stays
+  // full-height and the overlap is exactly the keyboard height. One formula,
+  // no translation, no root transform, no per-device hacks.
   useEffect(() => {
     const el = screenRef.current;
     if (!el) return;
 
-    if (typeof window !== "undefined") {
-      initialScreenHeightRef.current = window.innerHeight;
-    }
+    const isEditable = (n: Element | null) =>
+      !!n && (n.tagName === "INPUT" || n.tagName === "TEXTAREA" || (n as HTMLElement).isContentEditable);
 
     const syncViewport = () => {
       const vv = window.visualViewport;
-      const currentWinH = typeof window !== "undefined" ? window.innerHeight : 844;
-      const baseH = initialScreenHeightRef.current > 0 ? initialScreenHeightRef.current : currentWinH;
-
       if (!vv) {
         el.style.setProperty("--chat-bottom", "0px");
-        el.style.setProperty("--chat-top", "0px");
-        el.style.setProperty("--chat-bottom-padding", "env(safe-area-inset-bottom, 0px)");
-        if (frameRef.current) {
-          frameRef.current.style.bottom = "";
-          frameRef.current.style.top = "";
-          frameRef.current.style.height = "";
-        }
         return;
       }
 
-      const h = vv.height;
-      const top = vv.offsetTop;
+      const overlap = Math.max(0, window.innerHeight - vv.height);
+      el.style.setProperty("--chat-bottom", `${overlap}px`);
 
-      // Keyboard detection:
-      // Mobile keyboards are always > 150px tall.
-      // We compare against base window height when keyboard was closed (not hardware screen height).
-      const activeEl = typeof document !== "undefined" ? document.activeElement : null;
-      const isInputActive = activeEl?.tagName === "INPUT" || activeEl?.tagName === "TEXTAREA";
-      const heightDiff = baseH - h;
-      const isKeyboardOpen = heightDiff > 140 || (isInputActive && heightDiff > 60);
-
-      if (!isKeyboardOpen) {
-        // Keyboard is CLOSED:
-        if (currentWinH > 400) {
-          initialScreenHeightRef.current = currentWinH;
-        }
-
-        // Full screen height down to the absolute bottom:
-        el.style.setProperty("--chat-bottom", "0px");
-        el.style.setProperty("--chat-top", "0px");
-        el.style.setProperty("--chat-bottom-padding", "env(safe-area-inset-bottom, 0px)");
-
-        // Clear any keyboard-freeze styles on frame so it naturally follows CSS to bottom corners:
-        if (frameRef.current && frameRef.current.style.height) {
-          frameRef.current.style.bottom = "";
-          frameRef.current.style.top = "";
-          frameRef.current.style.height = "";
-        }
-      } else {
-        // Keyboard is OPEN:
-        const kbH = Math.max(0, baseH - h);
-        el.style.setProperty("--chat-bottom", `${kbH}px`);
-        el.style.setProperty("--chat-top", `${top}px`);
-        el.style.setProperty("--chat-bottom-padding", "0px");
-
-        // Freeze frame so Safari does not move the bottom frame up when keyboard appears:
-        if (frameRef.current && !frameRef.current.style.height) {
-          const rect = frameRef.current.getBoundingClientRect();
-          frameRef.current.style.bottom = "auto";
-          frameRef.current.style.top = `${rect.top}px`;
-          frameRef.current.style.height = `${rect.height}px`;
-        }
+      // The visual viewport shrinking against its tallest idle height is the
+      // one keyboard signal that is correct on every platform (innerHeight
+      // alone lies on older iOS; base-height snapshots lie on resizes-content).
+      if (!isEditable(document.activeElement) || vv.height > vvMaxRef.current) {
+        vvMaxRef.current = vv.height;
       }
+      const keyboardOpen = vv.height < vvMaxRef.current - 40;
+      el.style.setProperty(
+        "--chat-bottom-padding",
+        keyboardOpen ? "0px" : "env(safe-area-inset-bottom, 0px)"
+      );
+
+      // iOS force-pans the window to reveal a focused input even when the
+      // layout above already keeps it visible; undo that pan so the header
+      // stays put. (The body is locked — no legitimate window scroll exists.)
+      if (window.scrollY !== 0) window.scrollTo(0, 0);
 
       // Keep newest messages visible only if user was already at the bottom
       if (isNearBottomRef.current && listRef.current) {
@@ -1019,12 +984,12 @@ export default function ChatPage() {
 
   return (
     <>
-      <ScreenFrame frameRef={frameRef} />
+      <ScreenFrame />
       <div
         ref={screenRef}
         className="chat-screen font-display fixed inset-x-0 z-[65] bg-[#0b0b0b] text-white flex flex-col overflow-hidden"
         style={{
-          top: "var(--chat-top, 0px)",
+          top: 0,
           bottom: "var(--chat-bottom, 0px)",
           paddingTop: "max(12px, env(safe-area-inset-top, 24px))",
           overscrollBehavior: "none",
