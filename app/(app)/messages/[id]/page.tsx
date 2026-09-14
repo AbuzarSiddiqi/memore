@@ -2,13 +2,15 @@
 // CHAT — one 24-hour conversation. Clean, compact mobile messaging UI with a
 // quiet MEMORE hand-drawn accent: wobbly ink lines, lime + purple, handwritten
 // type. The server's clock decides when it all disappears.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { api, useApi, useSession, useToast } from "@/lib/client";
 import { getCachedMessages, appendCachedMessages, purgeConversationMessagesLocal, getCachedChats, removeCachedMessage, updateCachedMessageReactions } from "@/lib/client-cache";
 import { playSfx } from "@/lib/sfx";
+
+const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 import type { ChatDetail, ChatMessageView, ChatReplyRef, MemeView } from "@/lib/types";
 import { REACTION_IDS } from "@/lib/reactions";
@@ -213,6 +215,8 @@ export default function ChatPage() {
   const [detail, setDetail] = useState<ChatDetail | null>(null);
   const [gone, setGone] = useState<string | null>(null);
   const [text, setText] = useState("");
+  const [fontSize, setFontSize] = useState<number>(16);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [kbFocused, setKbFocused] = useState(false); // native keyboard open → tighten the composer's bottom padding
   const [menu, setMenu] = useState(false);
@@ -400,22 +404,100 @@ export default function ChatPage() {
   // The header and composer are fixed overlays; measure their heights (they
   // change with the safe-area, the reply bar and the temp label) and reserve
   // matching bands on the root so no message ever hides behind them.
+  const scrollToEnd = useCallback(() => {
+    window.scrollTo(0, document.documentElement.scrollHeight);
+  }, []);
+
+  // Dynamic font sizing with hysteresis:
+  // NORMAL: 16px (compact / 1-2 lines)
+  // LONG: 15px (starts using significant vertical space, ~3 lines)
+  // VERY LONG: 14px (approaches max composer height, ~4 lines)
+  // EXTREMELY LONG: 13px (clamped at max height with long text)
+  const getNextFontSize = useCallback((currentSize: number, val: string, scrollH: number): number => {
+    if (!val) return 16;
+    const len = val.length;
+    const lineBreaks = (val.match(/\n/g) || []).length;
+    const score = len + lineBreaks * 28;
+
+    if (currentSize === 16) {
+      if (score >= 90 || scrollH >= 88) return 15;
+      return 16;
+    }
+    if (currentSize === 15) {
+      if (score <= 65 && scrollH < 75) return 16;
+      if (score >= 155 || scrollH >= 115) return 14;
+      return 15;
+    }
+    if (currentSize === 14) {
+      if (score <= 125 && scrollH < 100) return 15;
+      if (score >= 225 || (scrollH >= 128 && len >= 200)) return 13;
+      return 14;
+    }
+    // currentSize === 13
+    if (score <= 190) return 14;
+    return 13;
+  }, []);
+
+  const adjustTextareaHeight = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+
+    // Temporarily reset height to auto to measure unconstrained scrollHeight
+    el.style.height = "auto";
+    const scrollH = el.scrollHeight;
+
+    const nextSize = el.value ? getNextFontSize(fontSize, el.value, scrollH) : 16;
+    if (nextSize !== fontSize) {
+      setFontSize(nextSize);
+    }
+
+    const MIN_H = 42;
+    const MAX_H = 128;
+    const targetH = Math.min(Math.max(scrollH, MIN_H), MAX_H);
+
+    el.style.height = `${targetH}px`;
+    const isOverflowing = scrollH > MAX_H;
+    el.style.overflowY = isOverflowing ? "auto" : "hidden";
+
+    // Keep newest typed line visible if typing near the end
+    if (isOverflowing && el.selectionEnd >= el.value.length - 2) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [fontSize, getNextFontSize]);
+
+  useIsomorphicLayoutEffect(() => {
+    adjustTextareaHeight();
+  }, [text, adjustTextareaHeight]);
+
+  useEffect(() => {
+    window.addEventListener("resize", adjustTextareaHeight);
+    return () => window.removeEventListener("resize", adjustTextareaHeight);
+  }, [adjustTextareaHeight]);
+
+  // 1. The chat is a NORMAL scrolling page — the same architecture as every
+  // website that works on an iPhone: a sticky header, messages in the page
+  // flow, a sticky composer, and iOS's own keyboard handling. The page scrolls
+  // when the keyboard opens (exactly like a plain website), the header and
+  // composer stick to the viewport, and no code fights the OS — the source of
+  // every previous failure is simply gone. Only scroll bookkeeping remains.
+  // The header and composer are fixed overlays; measure their heights (they
+  // change with the safe-area, the reply bar and the auto-growing input) and reserve
+  // matching bands on the root so no message ever hides behind them.
   useEffect(() => {
     const el = screenRef.current;
     if (!el) return;
     const apply = () => {
       el.style.setProperty("--hdr-h", `${headerRef.current?.offsetHeight ?? 0}px`);
       el.style.setProperty("--cmp-h", `${composerRef.current?.offsetHeight ?? 0}px`);
+      if (isNearBottomRef.current) {
+        window.scrollTo(0, document.documentElement.scrollHeight);
+      }
     };
     apply();
     const ro = new ResizeObserver(apply);
     if (headerRef.current) ro.observe(headerRef.current);
     if (composerRef.current) ro.observe(composerRef.current);
     return () => ro.disconnect();
-  }, []);
-
-  const scrollToEnd = useCallback(() => {
-    window.scrollTo(0, document.documentElement.scrollHeight);
   }, []);
 
   // 2. Near-bottom tracking on the page scroll
@@ -1208,25 +1290,39 @@ export default function ChatPage() {
             </button>
           </div>
         )}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-end gap-2.5">
           <button onClick={() => setAttach((a) => !a)} aria-label="Attach" className="relative flex h-[42px] w-[42px] shrink-0 items-center justify-center text-white/90 transition-transform active:scale-90">
             <WobblyCircle fill="#101010" stroke="#7C4DFF" />
             <span className="relative"><Icon name="plus" size={19} strokeWidth={2.6} /></span>
           </button>
-          <div className="relative flex min-w-0 flex-1 items-center">
+          <div className="relative flex min-h-[42px] min-w-0 flex-1 items-center">
             <svg viewBox="0 0 100 30" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
               <path
                 d="M8 4.5 C 30 2.5, 70 2.6, 92 4.5 C 96.8 6, 98.4 9.5, 98 15 C 98.4 20.5, 96.6 24, 92 25.5 C 70 27.4, 30 27.5, 8 25.5 C 3.4 24, 1.6 20.5, 2 15 C 1.6 9.5, 3.2 6, 8 4.5 Z"
                 fill="#101010" stroke="rgba(124,77,255,0.9)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke"
               />
             </svg>
-            <input
-              className="relative z-10 min-w-0 flex-1 bg-transparent px-3.5 py-2.5 text-[17px] text-white outline-none placeholder:text-white/35"
+            <textarea
+              ref={textareaRef}
+              rows={1}
+              className="relative z-10 min-w-0 flex-1 resize-none bg-transparent px-3.5 py-[9px] text-white outline-none placeholder:text-white/35 leading-[1.35] no-scrollbar"
+              style={{
+                height: "42px",
+                minHeight: "42px",
+                maxHeight: "128px",
+                fontSize: `${fontSize}px`,
+                transition: "font-size 0.12s ease-out",
+              }}
               placeholder="say something..."
               value={text}
               maxLength={280}
               onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") sendText(); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  sendText();
+                }
+              }}
               onFocus={(e) => {
                 // iOS scrolls the page itself to reveal the input — let it.
                 // Only bookkeeping here: tighter padding while typing, and no
@@ -1242,7 +1338,7 @@ export default function ChatPage() {
           <button
             onClick={() => { (document.activeElement as HTMLElement | null)?.blur?.(); setStickersOpen(true); }}
             aria-label="Stickers"
-            className="relative flex h-[38px] w-[38px] shrink-0 items-center justify-center text-white/90 transition-transform active:scale-90"
+            className="relative mb-[2px] flex h-[38px] w-[38px] shrink-0 items-center justify-center text-white/90 transition-transform active:scale-90"
           >
             <WobblyCircle fill="#101010" stroke="#7C4DFF" />
             <span className="relative">
@@ -1316,8 +1412,8 @@ export default function ChatPage() {
       />
       <style jsx global>{`
         .chat-screen ::selection { background: rgba(124, 77, 255, 0.45); color: #fff; }
-        .chat-screen input { caret-color: #fff; -webkit-tap-highlight-color: transparent; }
-        .chat-screen input:focus-visible { outline: none; box-shadow: none; }
+        .chat-screen input, .chat-screen textarea { caret-color: #fff; -webkit-tap-highlight-color: transparent; }
+        .chat-screen input:focus-visible, .chat-screen textarea:focus-visible { outline: none; box-shadow: none; }
         .chat-screen .msg-press { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: pan-y; }
         .chat-screen .msg-selected { filter: brightness(1.2) drop-shadow(0 0 9px rgba(200, 255, 61, 0.4)); outline: 2px solid rgba(200, 255, 61, 0.7); outline-offset: 2px; border-radius: 12px; }
         .chat-screen .msg-flash { animation: chatMsgFlash 1.5s ease; }
