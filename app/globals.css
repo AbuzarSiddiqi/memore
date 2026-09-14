@@ -315,7 +315,17 @@
   background: var(--bg-app);
 }
 
-html { scroll-behavior: smooth; }
+html {
+  scroll-behavior: smooth;
+  /* invisible scrollbar app-wide (Instagram-style): no indicator, no gutter */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+html::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
 
 body {
   background: var(--bg-app);
@@ -323,6 +333,7 @@ body {
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
+  overflow-x: hidden; /* full-bleed chat (100vw) must never cause sideways scroll */
 }
 
 ::selection { background: var(--lime); color: #0a0a0a; }

@@ -937,11 +937,16 @@ export default function ChatPage() {
         className="chat-screen font-display relative z-[65] bg-[#0b0b0b] text-white flex flex-col"
         style={{
           minHeight: "100dvh",
+          // full-bleed at every screen size: escape the app shell's px-4 /
+          // centered-column paddings so the chat spans the entire screen width
+          width: "100vw",
+          // top/bottom neutralise <main>'s paddings; the sides are the
+          // full-bleed trick (50% - 50vw centres a viewport-wide box in any
+          // padded/centered ancestor)
+          margin: "-8px calc(50% - 50vw) -128px",
           // reserve the bands the fixed header/composer overlay
           paddingTop: "var(--hdr-h, 108px)",
           paddingBottom: "var(--cmp-h, 96px)",
-          // neutralise the app shell's <main> paddings — the chat owns the screen
-          margin: "-8px 0 -128px",
         }}
       >
         {clickShield && <div className="absolute inset-0 z-[80]" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} />}
