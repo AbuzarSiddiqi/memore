@@ -51,30 +51,15 @@ function hashId(id: string): number {
   return h;
 }
 
-/** Barely-there hand-drawn screen edge: one thin, slightly imperfect line.
- * Anchored to the outer device corners and never moves with keyboard or input. */
-function ScreenFrame() {
+/** Barely-there screen edge: one thin line that hugs the physical device corners.
+ * Stays completely still at the outer corners and never shifts or shrinks with the keyboard. */
+function ScreenFrame({ frameRef }: { frameRef: React.RefObject<HTMLDivElement | null> }) {
   return (
-    <svg
-      viewBox="0 0 100 100"
-      preserveAspectRatio="none"
-      className="pointer-events-none fixed inset-0 z-[68] h-full w-full"
-      style={{
-        height: "100dvh",
-        maxHeight: "100dvh",
-        width: "100vw",
-      }}
+    <div
+      ref={frameRef}
+      className="chat-screen-frame pointer-events-none fixed z-[68]"
       aria-hidden
-    >
-      <path
-        d="M4.2 3.4 C 3 2.2, 5.2 1.4, 8 1.3 L 92.5 1.1 C 95.8 1.1, 97.6 2.4, 97.7 4.8 L 98 94.6 C 98.1 96.8, 96.4 98.2, 93.2 98.3 L 6.8 98.6 C 4.2 98.7, 2.4 97.3, 2.3 94.9 L 2 5.4 C 1.9 4.4, 3 3.5, 4.2 3.4 Z"
-        fill="none"
-        stroke="rgba(124,77,255,0.30)"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-        vectorEffect="non-scaling-stroke"
-      />
-    </svg>
+    />
   );
 }
 
@@ -243,6 +228,8 @@ export default function ChatPage() {
   const [investMeme, setInvestMeme] = useState<MemeView | null>(null);
   const [attach, setAttach] = useState(false);
   const screenRef = useRef<HTMLDivElement | null>(null);
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const fullHeightRef = useRef<number>(0);
   const [animatingMsgIds, setAnimatingMsgIds] = useState<Record<string, "zuup" | "receive" | "unsend" | "sticker">>({});
   const [doubleTapBurst, setDoubleTapBurst] = useState<{ msgId: string; x: number; y: number } | null>(null);
   const isNearBottomRef = useRef(true);
@@ -419,12 +406,20 @@ export default function ChatPage() {
     const el = screenRef.current;
     if (!el) return;
 
+    if (typeof window !== "undefined") {
+      fullHeightRef.current = window.innerHeight;
+    }
+
     const syncViewport = () => {
       const vv = window.visualViewport;
       if (!vv) {
         el.style.setProperty("--chat-vh", "100dvh");
         el.style.setProperty("--chat-top", "0px");
         el.style.setProperty("--chat-bottom-padding", "env(safe-area-inset-bottom, 0px)");
+        if (frameRef.current) {
+          frameRef.current.style.top = "4px";
+          frameRef.current.style.height = "calc(100dvh - 8px)";
+        }
         return;
       }
       const h = vv.height;
@@ -437,6 +432,18 @@ export default function ChatPage() {
         "--chat-bottom-padding",
         isKeyboardOpen ? "0px" : "env(safe-area-inset-bottom, 0px)"
       );
+
+      // Only update full screen height when the keyboard is CLOSED
+      if (!isKeyboardOpen && window.innerHeight > 300) {
+        fullHeightRef.current = window.innerHeight;
+      }
+
+      // The purple frame stays anchored to the device corners and NEVER shrinks with the keyboard!
+      if (frameRef.current) {
+        const frameH = fullHeightRef.current > 0 ? fullHeightRef.current : window.innerHeight;
+        frameRef.current.style.top = `${top + 4}px`;
+        frameRef.current.style.height = `${frameH - 8}px`;
+      }
 
       // Keep newest messages visible only if user was already at the bottom
       if (isNearBottomRef.current && listRef.current) {
@@ -981,7 +988,7 @@ export default function ChatPage() {
 
   return (
     <>
-      <ScreenFrame />
+      <ScreenFrame frameRef={frameRef} />
       <div
         ref={screenRef}
         className="chat-screen font-display fixed inset-x-0 z-[65] bg-[#0b0b0b] text-white flex flex-col overflow-hidden"
