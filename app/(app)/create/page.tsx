@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api, useApi, useSession, useToast } from "@/lib/client";
 import type { MemeView } from "@/lib/types";
 import { NeoButton, Sheet } from "@/components/ui";
+import { TextComposer } from "@/components/post-button";
 
 const CATEGORIES = ["college", "gaming", "anime", "football", "programming", "bollywood", "technology", "workplace", "indian", "chaos"];
 const TEMPLATES = ["img-002", "img-013", "img-016", "img-023", "img-024", "img-072"].map((id) => `/memes/${id}.svg`);
@@ -39,6 +40,7 @@ function CreateInner() {
   const params = useSearchParams();
   const remixId = params.get("remix");
   const { data: remixData } = useApi<{ meme: MemeView }>(remixId ? `/api/memes/${remixId}` : null);
+  const [textOpen, setTextOpen] = useState(false);
 
   return (
     <div className="mt-2 pb-10">
@@ -51,6 +53,16 @@ function CreateInner() {
       </div>
 
       <Studio remixId={remixId} remixCategory={remixData?.meme.category} />
+
+      {!remixId && (
+        <div className="mt-5 text-center">
+          <button className="neo-btn ghost" onClick={() => setTextOpen(true)}>
+            <span className="font-display font-extrabold" style={{ color: "var(--yellow)" }}>Aa</span> or write a TEXT MEME
+          </button>
+        </div>
+      )}
+
+      <TextComposer open={textOpen} onClose={() => setTextOpen(false)} />
 
       {remixData && (
         <p className="text-[12px] muted mt-3 text-center">

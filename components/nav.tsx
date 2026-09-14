@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { api, fmtAura, useSession, useApi, clientLogout } from "@/lib/client";
 import { MemoreLogo, MemoreMark, MemoreWordmark, Spark } from "@/components/brand";
 import { Icon, type IconName } from "@/components/icons";
+import { TextThumb } from "@/components/text-meme";
 import { ChangePct, NeoCard } from "./ui";
 import type { MemeView } from "@/lib/types";
 
@@ -298,8 +299,12 @@ export function RightRail() {
           {trending.map((m, i) => (
             <Link key={m.id} href={`/meme/${m.id}`} className="flex items-center gap-3 group">
               <span className="hd font-bold text-sm w-4 muted">{i + 1}</span>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={m.thumbnail_url} alt="" className="w-11 h-11 object-cover rounded-xl" loading="lazy" />
+              {m.media_type === "text"
+                ? <TextThumb meme={m} className="w-11 h-11" />
+                : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={m.thumbnail_url} alt="" className="w-11 h-11 object-cover rounded-xl" loading="lazy" />
+                )}
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] font-semibold truncate group-hover:underline">{m.caption}</div>
                 <div className="flex items-center gap-2 text-xs">

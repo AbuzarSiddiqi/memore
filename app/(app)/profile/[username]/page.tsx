@@ -9,6 +9,7 @@ import type { Meme, MemeView, PublicUser } from "@/lib/types";
 import { Avatar, ChangePct, EmptyState, NeoButton, NeoCard, Skeleton, Sheet } from "@/components/ui";
 
 import { MemeCard } from "@/components/meme";
+import { TextThumb, TextTile } from "@/components/text-meme";
 import { NavIcon } from "@/components/nav";
 
 interface ProfileData {
@@ -253,8 +254,12 @@ export default function ProfilePage({ params }: { params: Promise<{ username: st
             <div className="grid grid-cols-3 gap-2">
               {profile.memes.map((m) => (
                 <Link key={m.id} href={`/meme/${m.id}`} className="relative rounded-xl overflow-hidden border border-[var(--line)] group">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={m.thumbnail_url} alt={m.caption} className="w-full aspect-square object-cover group-hover:opacity-80 transition-opacity" loading="lazy" />
+                  {m.media_type === "text" ? (
+                    <TextTile meme={m} className="w-full aspect-square group-hover:opacity-80 transition-opacity" />
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={m.thumbnail_url} alt={m.caption} className="w-full aspect-square object-cover group-hover:opacity-80 transition-opacity" loading="lazy" />
+                  )}
                   {m.media_type === "video" && <span className="absolute top-1.5 right-1.5 text-[11px]">▶️</span>}
                 </Link>
               ))}
@@ -289,8 +294,12 @@ export default function ProfilePage({ params }: { params: Promise<{ username: st
                 <div className="space-y-1.5">
                   {profile.holdings.slice(0, 5).map((h) => (
                     <Link key={h.meme.id} href={`/meme/${h.meme.id}`} className="flex items-center gap-2 text-[13px] group">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={h.meme.thumbnail_url} alt="" className="w-7 h-7 rounded-lg object-cover" />
+                      {h.meme.media_type === "text"
+                        ? <TextThumb meme={h.meme} className="w-7 h-7" />
+                        : (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={h.meme.thumbnail_url} alt="" className="w-7 h-7 rounded-lg object-cover" />
+                        )}
                       <span className="truncate flex-1 group-hover:underline">{h.meme.caption}</span>
                       <ChangePct value={h.pnl_pct} className="text-[12px]" />
                     </Link>

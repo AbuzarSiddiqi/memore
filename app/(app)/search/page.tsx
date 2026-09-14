@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { fmtAura, useSession } from "@/lib/client";
 import { Avatar, ChangePct, EmptyState, NeoCard } from "@/components/ui";
+import { TextThumb } from "@/components/text-meme";
 
 const TRENDING_SEARCHES = ["college", "engineering", "bollywood", "football", "anime", "chai", "css", "monday", "pigeons"];
 
@@ -111,8 +112,12 @@ export default function SearchPage() {
               <div className="space-y-2">
                 {results.memes.map((m) => (
                   <Link key={m.id} href={`/meme/${m.id}`} className="neo-sm p-3 flex items-center gap-3 bg-[var(--surface)]">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={m.thumbnail_url} alt="" className="w-12 h-12 rounded-xl object-cover border-2 border-[var(--ink)]" />
+                    {m.media_type === "text"
+                      ? <TextThumb meme={m} className="w-12 h-12" />
+                      : (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={m.thumbnail_url} alt="" className="w-12 h-12 rounded-xl object-cover border-2 border-[var(--ink)]" />
+                      )}
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-semibold line-clamp-1">{m.caption}</div>
                       <div className="text-[11px] muted">@{m.creator.username} · {m.category}</div>
@@ -132,5 +137,5 @@ export default function SearchPage() {
   );
 }
 
-interface MemeLite { id: string; caption: string; thumbnail_url: string; current_price: number; change_24h: number; category: string; creator: { username: string } }
+interface MemeLite { id: string; caption: string; thumbnail_url: string; media_type?: string; current_price: number; change_24h: number; category: string; creator: { username: string } }
 interface UserLite { id: string; username: string; display_name: string; bio: string; avatar_bg: string; aura_balance: number }

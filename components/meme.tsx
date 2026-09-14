@@ -9,6 +9,7 @@ import { api, fmtAura, fmtNum, fmtPct, timeAgo, useSession, useToast } from "@/l
 import { playSfx } from "@/lib/sfx";
 import { AuraBurst, useTapInvest } from "./aura-burst";
 import { ShareSheet } from "./share";
+import { TextPostBody, TextThumb } from "./text-meme";
 import { Avatar, ChangePct, LabelPill, NeoButton, NeoCard, Sheet } from "./ui";
 import { InstagramEmbed } from "./instagram";
 import { Spark } from "./brand";
@@ -41,7 +42,7 @@ export function DoubleTapZone({
   children: React.ReactNode;
   className?: string;
   onSingle?: () => void;
-  chipPosition?: "bottom-left" | "top-left";
+  chipPosition?: "bottom-left" | "top-left" | "none";
 }) {
   const { user } = useSession();
   const toast = useToast();
@@ -81,7 +82,7 @@ export function DoubleTapZone({
     <div ref={wrapRef} className={`relative ${className}`} onClick={handleClick} role="presentation">
       {children}
 
-      {myInvested > 0 && (
+      {chipPosition !== "none" && myInvested > 0 && (
         <span
           className={`pill p-lime absolute z-10 pointer-events-none ${chipPosition === "bottom-left" ? "bottom-2.5 left-2.5" : "top-2.5 left-2.5"} ${pop ? "anim-pop" : ""}`}
           style={{ fontSize: 10.5 }}
@@ -97,6 +98,7 @@ export function DoubleTapZone({
 
 // ---------------------------------------------------------------- media
 export function MediaView({ meme, className = "", eager = false }: { meme: MemeView; className?: string; eager?: boolean }) {
+  if (meme.media_type === "text") return <TextPostBody meme={meme} className={className} />;
   if (meme.media_type === "video") return <VideoMedia meme={meme} className={className} />;
   return (
     // eslint-disable-next-line @next/next/no-img-element
@@ -669,8 +671,12 @@ export function InvestSheet({ meme, open, onClose, onDone }: { meme: MemeView; o
         <>
           <div className="flex items-start justify-between mb-4">
             <div>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={meme.thumbnail_url} alt="" className="w-14 h-14 rounded-2xl object-cover" />
+              {meme.media_type === "text"
+                ? <TextThumb meme={meme} className="w-14 h-14" />
+                : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={meme.thumbnail_url} alt="" className="w-14 h-14 rounded-2xl object-cover" />
+                )}
             </div>
           </div>
           <div className="hd text-[22px] mb-5 -mt-10 text-center">Invest in this meme?</div>

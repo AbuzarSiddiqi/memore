@@ -6,6 +6,7 @@ import { api, useOfflineStatus, useSession } from "@/lib/client";
 import { getCachedFeed, setCachedFeed, getMemoryCache } from "@/lib/client-cache";
 import type { EventView, FeedResponse, MissionView, SeasonView } from "@/lib/types";
 import { MemeCard, VideoMemeCard } from "@/components/meme";
+import { TextMemeCard } from "@/components/text-meme";
 import { EmptyState, FeedSkeleton } from "@/components/ui";
 
 const TABS = [
@@ -204,7 +205,9 @@ export default function HomePage() {
       {/* feed */}
       <div className="space-y-5">
         {memes.map((m) =>
-          m.media_type === "video" ? <VideoMemeCard key={m.id} meme={m} onChanged={refresh} /> : <MemeCard key={m.id} meme={m} onChanged={refresh} />
+          m.media_type === "video" ? <VideoMemeCard key={m.id} meme={m} onChanged={refresh} />
+          : m.media_type === "text" ? <TextMemeCard key={m.id} meme={m} onChanged={refresh} />
+          : <MemeCard key={m.id} meme={m} onChanged={refresh} />
         )}
         {loading && memes.length === 0 && <FeedSkeleton />}
         {loading && memes.length > 0 && (

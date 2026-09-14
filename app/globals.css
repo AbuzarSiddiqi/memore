@@ -179,6 +179,79 @@ body {
 .neo-btn.sm { padding: 6px 14px; font-size: 12.5px; }
 .neo-btn.icon { padding: 8px; border-radius: 999px; width: 36px; height: 36px; }
 
+/* ---------- THE POST button (signature floating action) ---------- */
+.post-fab {
+  position: fixed;
+  right: max(16px, var(--safe-right));
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 130px);
+  z-index: 45;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 54px; padding: 0 24px;
+  font-family: var(--font-display); font-weight: 800; font-size: 15.5px;
+  letter-spacing: 0.04em; color: #0a0a0a;
+  background: var(--lime);
+  border: 2px solid #0a0a0a;
+  border-radius: 999px;
+  cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+  box-shadow: 3.5px 3.5px 0 var(--purple);
+  transform: rotate(-1.5deg);
+  transition: transform 0.14s cubic-bezier(0.3, 1.4, 0.5, 1), box-shadow 0.14s ease, opacity 0.2s ease;
+  animation: postFabIn 0.5s cubic-bezier(0.25, 1.6, 0.45, 1) both;
+}
+@keyframes postFabIn {
+  0% { transform: scale(0.55) rotate(-14deg); opacity: 0; }
+  100% { transform: scale(1) rotate(-1.5deg); opacity: 1; }
+}
+.post-fab:hover {
+  transform: rotate(-2.5deg) translateY(-3px);
+  box-shadow: 5.5px 6px 0 var(--purple);
+}
+.post-fab:active {
+  transform: rotate(-1deg) translateY(1px) scale(0.97);
+  box-shadow: 1.5px 1.5px 0 var(--purple);
+  transition-duration: 0.06s;
+}
+.post-fab:focus-visible {
+  outline: 3px solid var(--lime); outline-offset: 3px;
+}
+/* hand-drawn scribble under the label — hidden until hover/focus */
+.post-fab-scribble {
+  position: absolute; left: 18%; right: 18%; bottom: -9px; height: 8px; width: 64%;
+  stroke-dasharray: 90; stroke-dashoffset: 90;
+  pointer-events: none;
+}
+.post-fab:hover .post-fab-scribble, .post-fab:focus-visible .post-fab-scribble {
+  animation: scribbleIn 0.28s ease-out forwards;
+}
+@keyframes scribbleIn { to { stroke-dashoffset: 0; } }
+/* gentle shrink while the feed is being flung — never hidden for long */
+.post-fab-shrunk { transform: rotate(-1deg) scale(0.88); opacity: 0.8; }
+.post-fab-shrunk:hover { transform: rotate(-2.5deg) scale(0.88); }
+@media (min-width: 1024px) {
+  .post-fab { bottom: 28px; }
+}
+
+/* ---------- create-type rows (what are we posting? sheet) ---------- */
+.create-type {
+  display: flex; align-items: center; gap: 14px; width: 100%;
+  padding: 13px 15px;
+  background: var(--surface);
+  border: 1.5px solid var(--line);
+  border-radius: 22px 18px 21px 19px / 19px 22px 18px 22px;
+  box-shadow: var(--ink-shadow-sm);
+  cursor: pointer; text-align: left;
+  transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.create-type:hover { transform: rotate(-0.8deg) translateY(-2px); border-color: var(--lime); box-shadow: 4px 4px 0 rgba(124, 77, 255, 0.2); }
+.create-type:active { transform: scale(0.985); box-shadow: 1px 1px 0 rgba(124, 77, 255, 0.14); }
+.create-type:focus-visible { outline: 3px solid var(--lime); outline-offset: 2px; }
+.create-type-ic {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 46px; height: 46px; flex-shrink: 0;
+  border: 2px solid var(--line);
+  border-radius: 16px 13px 15px 14px / 14px 16px 13px 15px;
+}
+
 /* ---------- inputs ---------- */
 .neo-input, .neo-select, textarea.neo-input {
   width: 100%; background: var(--surface-2); color: var(--ink);
@@ -270,6 +343,30 @@ body {
 .sheet.sheet-closing { animation: sheetDown 0.24s cubic-bezier(0.4, 0, 0.7, 0.2) forwards; }
 @keyframes sheetFadeOut { to { opacity: 0; } }
 @keyframes sheetDown { to { transform: translateY(105%); } }
+
+/* ---------- dark sheet variant (creation flows) ---------- */
+.sheet-dark {
+  background: #131313; color: var(--ink);
+  border-color: #2d2d2d;
+  box-shadow: 0 -12px 44px rgba(0,0,0,0.7);
+}
+.sheet-dark .sheet-grab { background: rgba(255,255,255,0.22); }
+.sheet-dark .muted { color: var(--muted); }
+.sheet-dark .neo-sm { background: #1c1c1c; border-color: #262626; box-shadow: none; color: var(--ink); }
+.sheet-dark .neo-input, .sheet-dark .neo-select, .sheet-dark textarea.neo-input {
+  background: #1c1c1c; color: var(--ink); border-color: #2d2d2d;
+}
+.sheet-dark .neo-input::placeholder { color: var(--muted); }
+.sheet-dark .neo-input:focus { border-color: var(--lime); box-shadow: 2.5px 2.5px 0 rgba(200, 255, 61, 0.25); }
+.sheet-dark .pill { background: #1c1c1c; border-color: #2d2d2d; color: var(--ink); }
+.sheet-dark .pill.p-lime { background: var(--lime); border-color: #0a0a0a; color: #0a0a0a; }
+.sheet-dark .pill.p-yellow { background: rgba(255, 212, 61, 0.14); border-color: rgba(255, 212, 61, 0.35); color: var(--yellow); }
+.sheet-dark .pill.p-black { background: #000; border-color: #000; color: #fff; }
+.sheet-dark .chip { background: #1c1c1c; border-color: #2d2d2d; color: var(--muted); }
+.sheet-dark .chip.active { background: var(--lime); border-color: #0a0a0a; color: #0a0a0a; box-shadow: 2.5px 2.5px 0 rgba(0,0,0,0.5); }
+.sheet-dark .neo-btn.ghost { border-color: #2d2d2d; color: var(--ink); box-shadow: 2.5px 2.5px 0 rgba(0,0,0,0.55); }
+.sheet-dark .pos { color: var(--pos); }
+.sheet-dark .neg { color: var(--neg); }
 
 /* comment sheet choreography (feed + reels) */
 @keyframes cFadeIn { from { opacity: 0; } to { opacity: 1; } }

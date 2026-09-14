@@ -17,6 +17,9 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   viewportFit: "cover",
+  // let the on-screen keyboard resize the page so fixed bottom sheets
+  // (text composer) rise above it on Android/PWAs; iOS is handled in JS
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

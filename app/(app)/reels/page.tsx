@@ -16,6 +16,7 @@ import { AuraBurst, useTapInvest } from "@/components/aura-burst";
 import { InstagramEmbed } from "@/components/instagram";
 import { Spark } from "@/components/brand";
 import { ShareSheet } from "@/components/share";
+import { TextReelBody } from "@/components/text-meme";
 
 const TAP_MS = 260;
 // home-feed rail style: same button type as the feed, but subtler and higher up
@@ -412,6 +413,76 @@ function ImageSlide({
   );
 }
 
+/** TEXT MEME reel — the words fill the frame. Double-tap = invest ✦1. */
+function TextSlide({
+  meme,
+  active,
+  commentsOpen,
+  onComments,
+  onInvest,
+  onShare,
+  dim,
+}: {
+  meme: MemeView;
+  active: boolean;
+  commentsOpen: boolean;
+  onComments: () => void;
+  onInvest: () => void;
+  onShare: () => void;
+  dim: boolean;
+  dataTick: number;
+}) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const { user } = useSession();
+  const { events, tap, myInvested } = useTapInvest(meme, { prefix: "reel" });
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => { if (clickTimer.current) clearTimeout(clickTimer.current); }, []);
+
+  const handleClick = (e: React.MouseEvent) => {
+    if (commentsOpen) return;
+    if (clickTimer.current) {
+      clearTimeout(clickTimer.current);
+      clickTimer.current = null;
+      const rect = wrapRef.current?.getBoundingClientRect();
+      tap(e.clientX - (rect?.left ?? 0), e.clientY - (rect?.top ?? 0));
+      return;
+    }
+    clickTimer.current = setTimeout(() => { clickTimer.current = null; }, TAP_MS);
+  };
+
+  const overlayDim = commentsOpen || dim;
+
+  return (
+    <div ref={wrapRef} className="relative h-full w-full bg-black overflow-hidden" onClick={handleClick}>
+      <TextReelBody meme={meme} dimmed={overlayDim} />
+      <AuraBurst events={events} />
+      <Rail meme={meme} onComments={onComments} onInvest={onInvest} onShare={onShare} dimmed={overlayDim} />
+      {/* compact info row — no caption repeat, the text IS the slide */}
+      <div className="absolute left-3 right-16 space-y-2 z-10" style={{ bottom: "max(16px, calc(env(safe-area-inset-bottom, 0px) + 16px))" }}>
+        <div className={`space-y-2 reel-fade ${overlayDim ? "reel-hidden" : "reel-shown"}`}>
+          <div className="flex items-center gap-2">
+            <Avatar name={meme.creator.display_name} bg={meme.creator.avatar_bg} username={meme.creator.username} size={34} />
+            <Link href={`/profile/${meme.creator.username}`} className="hd font-bold text-white text-[13px]" style={{ textShadow: "0 1px 6px rgba(0,0,0,0.8)" }}>
+              {meme.creator.display_name.toLowerCase().replace(/\s/g, "")}
+            </Link>
+            <span className="text-[11px] text-white/60">{timeAgoShort(meme.created_at)}</span>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="pill p-yellow aura-num !text-[10px]">✦ {meme.current_price}</span>
+            <span className="pill p-black !text-[10px]"><ChangePct value={meme.change_24h} className="text-[10.5px]" /></span>
+            <span className="pill p-black !text-[9px]">Aa TEXT</span>
+          </div>
+          {myInvested > 0 && <span className="pill p-lime !text-[9.5px] aura-num">✦ {myInvested} invested by you</span>}
+          {user && (
+            <NeoButton variant="primary" size="sm" onClick={(e) => { e.stopPropagation(); onInvest(); }}>✦ Invest</NeoButton>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function InstagramSlide({
   meme,
   commentsOpen,
@@ -654,6 +725,17 @@ function ReelsInner() {
                 dataTick={dataTick}
                 muted={muted}
                 onToggleMute={toggleMute}
+              />
+            ) : m.media_type === "text" ? (
+              <TextSlide
+                meme={m}
+                active={i === active}
+                commentsOpen={commentsFor?.id === m.id}
+                onComments={() => setCommentsFor(m)}
+                onInvest={() => setInvestFor(m)}
+                onShare={() => setShareFor(m)}
+                dim={uiIdle}
+                dataTick={dataTick}
               />
             ) : (
               <ImageSlide

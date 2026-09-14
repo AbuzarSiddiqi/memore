@@ -66,8 +66,26 @@ export function ContactsSheet({ open, onClose, title = "START SOMETHING", onPick
   );
 }
 
-/** Meme-share bubble body: preview card + invest entry point. */
+/** Meme-share bubble body: preview card + invest entry point. Text memes
+ * render their actual text (readable, selectable) instead of a thumbnail. */
 export function SharedPostCard({ meme, children }: { meme: MemeView; children?: React.ReactNode }) {
+  if (meme.media_type === "text") {
+    return (
+      <div className="rounded-2xl overflow-hidden border-2 border-[#0a0a0a] bg-[#141414] text-white w-[210px]">
+        <div className="px-2.5 pt-1.5 flex items-center gap-1 text-[9px] font-bold tracking-[0.18em] text-white/60">
+          <Spark size={9} color="#C8FF3D" /> TEXT MEME
+        </div>
+        <Link href={`/meme/${meme.id}`} className="block px-3 py-2 select-text">
+          <p className="font-display font-semibold text-[12.5px] leading-snug whitespace-pre-wrap line-clamp-6">{meme.caption}</p>
+        </Link>
+        <div className="px-2.5 py-2 flex items-center gap-1.5 flex-wrap">
+          <span className="pill p-yellow !text-[9px]">✦ {meme.current_price}</span>
+          {meme.heat && <span className="pill p-black !text-[9px]">{meme.heat.level}</span>}
+        </div>
+        {children}
+      </div>
+    );
+  }
   return (
     <div className="rounded-2xl overflow-hidden border-2 border-[#0a0a0a] bg-[#0d0d0d] text-white w-[210px]">
       <div className="px-2.5 pt-1.5 flex items-center gap-1 text-[9px] font-bold tracking-[0.18em] text-white/60">

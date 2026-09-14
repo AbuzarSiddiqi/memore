@@ -4,6 +4,7 @@ import { useState } from "react";
 import { api, fmtAura, timeAgo, useApi, useToast } from "@/lib/client";
 import type { MemeView, PublicUser } from "@/lib/types";
 import { EmptyState, NeoButton, NeoCard, Skeleton, StatBox } from "@/components/ui";
+import { TextThumb } from "@/components/text-meme";
 
 interface AdminData {
   stats: { users: number; memes: number; transactions: number; open_reports: number };
@@ -70,8 +71,12 @@ export default function AdminPage() {
       <NeoCard className="p-2 divide-y-2 divide-[var(--ink)]/10">
         {data.memes.slice(0, 20).map((m) => (
           <div key={m.id} className="flex items-center gap-3 p-2.5">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={m.thumbnail_url} alt="" className="w-10 h-10 rounded-lg object-cover border-2 border-[var(--ink)]" />
+            {m.media_type === "text"
+              ? <TextThumb meme={m} className="w-10 h-10" />
+              : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={m.thumbnail_url} alt="" className="w-10 h-10 rounded-lg object-cover border-2 border-[var(--ink)]" />
+              )}
             <div className="flex-1 min-w-0">
               <div className="text-sm font-semibold truncate">{m.caption}</div>
               <div className="text-[11px] muted">@{m.creator.username} · {fmtAura(m.current_price)} · {m.status}</div>

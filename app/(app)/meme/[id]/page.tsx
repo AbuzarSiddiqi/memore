@@ -9,6 +9,7 @@ import type { MemeView, PublicUser, PricePoint } from "@/lib/types";
 import { AreaChart } from "@/components/charts";
 import { Avatar, ChangePct, NeoButton, NeoCard, SectionTitle, Skeleton } from "@/components/ui";
 import { CallSheet, CommentSection, DoubleTapZone, HeatPill, InvestSheet, MediaView, ReportDialog, SellSheet, SmartMoneyLine } from "@/components/meme";
+import { TextPostBody, TextThumb } from "@/components/text-meme";
 import { Spark } from "@/components/brand";
 import { Icon } from "@/components/icons";
 import { ShareSheet } from "@/components/share";
@@ -99,58 +100,130 @@ export default function MemeDetail({ params }: { params: Promise<{ id: string }>
 
   return (
     <div className="pb-10">
-      {/* full-bleed hero */}
-      <div className="-mx-4 -mt-2 relative bg-black">
-        <DoubleTapZone
-          meme={m}
-          onSingle={() => {
-            if (m.media_type === "video" || m.source === "instagram") {
-              router.push(`/reels?id=${m.id}`);
-            }
-          }}
-        >
-          <MediaView meme={m} eager />
-        </DoubleTapZone>
-
-        {/* top controls */}
-        <div className="absolute top-3 left-3 right-3 flex items-center justify-between z-10 pointer-events-none">
-          <button onClick={() => router.back()} className="neo-btn icon !bg-black/55 !border-0 backdrop-blur-sm pointer-events-auto" aria-label="Back">←</button>
-        </div>
-
-        {/* right rail */}
-        <div className="absolute right-3 top-1/2 -translate-y-1/2 z-10 flex flex-col gap-2.5 items-center">
-          <button className={railBtn} onClick={() => setInvestOpen(true)} aria-label="Invest">
-            <Spark size={17} color="#C8FF3D" />
-            <span className={railNum} style={{ color: "#C8FF3D" }}>{fmtNum(m.total_invested)}</span>
-          </button>
-          <a href="#comments" className={railBtn} aria-label="Comments">
-            <Icon name="comment" size={16} strokeWidth={2.2} />
-            <span className={railNum}>{m.comment_count}</span>
-          </a>
-          <button className={railBtn} onClick={() => setShareOpen(true)} aria-label="Share">
-            <Icon name="share" size={16} strokeWidth={2.2} />
-            <span className={railNum}>{m.saves}</span>
-          </button>
-          <button className={railBtn} onClick={save} aria-label={isSaved ? "Unsave" : "Save"}>
-            <Icon name="star" size={16} strokeWidth={2.2} filled={isSaved} style={isSaved ? { color: "#FFD23F" } : undefined} />
-          </button>
-        </div>
-
-        {/* creator strip over media bottom */}
-        <div className="absolute left-3 right-3 bottom-3 z-10 flex items-center gap-2.5 bg-black/45 backdrop-blur-sm rounded-2xl px-3 py-2.5">
-          <Avatar name={m.creator.display_name} bg={m.creator.avatar_bg} username={m.creator.username} size={34} />
-          <div className="min-w-0 flex-1">
-            <Link href={`/profile/${m.creator.username}`} className="font-bold text-[13px] text-white block truncate hover:underline">
-              {m.creator.display_name.toLowerCase().replace(/\s/g, "")}
-            </Link>
-            <div className="text-[10.5px] text-white/60">{timeAgo(m.created_at)} · {m.investor_count} investors</div>
+      {m.media_type === "text" ? (
+        <div className="pt-2">
+          {/* top controls */}
+          <div className="flex items-center justify-between mb-3.5">
+            <button
+              onClick={() => router.back()}
+              className="neo-btn icon !bg-black/55 !border-0 backdrop-blur-sm text-white"
+              aria-label="Back"
+            >
+              ←
+            </button>
+            <span className="pill p-black !text-[10px] font-bold">
+              <Spark size={11} color="#C8FF3D" /> TEXT POST
+            </span>
           </div>
-          {user?.id !== m.creator.id && <FollowInline username={m.creator.username} initial={!!m.creator.is_following} />}
+
+          {/* creator strip above text */}
+          <div className="flex items-center gap-2.5 bg-[#141414] border border-[#2d2d2d] rounded-2xl px-3.5 py-3 mb-3">
+            <Avatar name={m.creator.display_name} bg={m.creator.avatar_bg} username={m.creator.username} size={36} />
+            <div className="min-w-0 flex-1">
+              <Link href={`/profile/${m.creator.username}`} className="font-bold text-[13.5px] text-white block truncate hover:underline">
+                {m.creator.display_name.toLowerCase().replace(/\s/g, "")}
+              </Link>
+              <div className="text-[11px] text-white/60">{timeAgo(m.created_at)} · {m.investor_count} investors</div>
+            </div>
+            {user?.id !== m.creator.id && <FollowInline username={m.creator.username} initial={!!m.creator.is_following} />}
+          </div>
+
+          {/* full text post with zero overlap */}
+          <DoubleTapZone meme={m} chipPosition="none">
+            <TextPostBody meme={m} size="lg" />
+          </DoubleTapZone>
+
+          {/* actions under the text card */}
+          <div className="flex items-center justify-between gap-2 mt-3 px-1">
+            <div className="flex items-center gap-2">
+              <button
+                className="neo-btn sm !bg-[#141414] border border-[#2d2d2d] text-white gap-1.5"
+                onClick={() => setInvestOpen(true)}
+                aria-label="Invest"
+              >
+                <Spark size={15} color="#C8FF3D" />
+                <span className="text-xs font-bold" style={{ color: "#C8FF3D" }}>{fmtNum(m.total_invested)}</span>
+              </button>
+              <a
+                href="#comments"
+                className="neo-btn sm !bg-[#141414] border border-[#2d2d2d] text-white gap-1.5"
+                aria-label="Comments"
+              >
+                <Icon name="comment" size={15} strokeWidth={2.2} />
+                <span className="text-xs font-bold">{m.comment_count}</span>
+              </a>
+              <button
+                className="neo-btn sm !bg-[#141414] border border-[#2d2d2d] text-white gap-1.5"
+                onClick={() => setShareOpen(true)}
+                aria-label="Share"
+              >
+                <Icon name="share" size={15} strokeWidth={2.2} />
+                <span className="text-xs font-bold">{m.saves}</span>
+              </button>
+              <button
+                className="neo-btn sm icon !bg-[#141414] border border-[#2d2d2d] text-white"
+                onClick={save}
+                aria-label={isSaved ? "Unsave" : "Save"}
+              >
+                <Icon name="star" size={15} strokeWidth={2.2} filled={isSaved} style={isSaved ? { color: "#FFD23F" } : undefined} />
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      ) : (
+        /* full-bleed hero */
+        <div className="-mx-4 -mt-2 relative bg-black">
+          <DoubleTapZone
+            meme={m}
+            onSingle={() => {
+              if (m.media_type === "video" || m.source === "instagram") {
+                router.push(`/reels?id=${m.id}`);
+              }
+            }}
+          >
+            <MediaView meme={m} eager />
+          </DoubleTapZone>
+
+          {/* top controls */}
+          <div className="absolute top-3 left-3 right-3 flex items-center justify-between z-10 pointer-events-none">
+            <button onClick={() => router.back()} className="neo-btn icon !bg-black/55 !border-0 backdrop-blur-sm pointer-events-auto" aria-label="Back">←</button>
+          </div>
+
+          {/* right rail */}
+          <div className="absolute right-3 top-1/2 -translate-y-1/2 z-10 flex flex-col gap-2.5 items-center">
+            <button className={railBtn} onClick={() => setInvestOpen(true)} aria-label="Invest">
+              <Spark size={17} color="#C8FF3D" />
+              <span className={railNum} style={{ color: "#C8FF3D" }}>{fmtNum(m.total_invested)}</span>
+            </button>
+            <a href="#comments" className={railBtn} aria-label="Comments">
+              <Icon name="comment" size={16} strokeWidth={2.2} />
+              <span className={railNum}>{m.comment_count}</span>
+            </a>
+            <button className={railBtn} onClick={() => setShareOpen(true)} aria-label="Share">
+              <Icon name="share" size={16} strokeWidth={2.2} />
+              <span className={railNum}>{m.saves}</span>
+            </button>
+            <button className={railBtn} onClick={save} aria-label={isSaved ? "Unsave" : "Save"}>
+              <Icon name="star" size={16} strokeWidth={2.2} filled={isSaved} style={isSaved ? { color: "#FFD23F" } : undefined} />
+            </button>
+          </div>
+
+          {/* creator strip over media bottom */}
+          <div className="absolute left-3 right-3 bottom-3 z-10 flex items-center gap-2.5 bg-black/45 backdrop-blur-sm rounded-2xl px-3 py-2.5">
+            <Avatar name={m.creator.display_name} bg={m.creator.avatar_bg} username={m.creator.username} size={34} />
+            <div className="min-w-0 flex-1">
+              <Link href={`/profile/${m.creator.username}`} className="font-bold text-[13px] text-white block truncate hover:underline">
+                {m.creator.display_name.toLowerCase().replace(/\s/g, "")}
+              </Link>
+              <div className="text-[10.5px] text-white/60">{timeAgo(m.created_at)} · {m.investor_count} investors</div>
+            </div>
+            {user?.id !== m.creator.id && <FollowInline username={m.creator.username} initial={!!m.creator.is_following} />}
+          </div>
+        </div>
+      )}
 
       {/* caption + hashtags */}
-      <p className="text-[15px] font-medium mt-4">{m.caption}</p>
+      {m.media_type !== "text" && <p className="text-[15px] font-medium mt-4">{m.caption}</p>}
       {m.description && <p className="text-[13px] muted mt-1">{m.description}</p>}
       <div className="flex items-center gap-2 mt-3 flex-wrap">
         <span className="pill">#{m.category}</span>
@@ -245,8 +318,12 @@ export default function MemeDetail({ params }: { params: Promise<{ id: string }>
           <div className="grid grid-cols-3 gap-2.5">
             {similar.map((s) => (
               <Link key={s.id} href={`/meme/${s.id}`} className="neo-sm p-2 text-center hover:border-[var(--lime)] transition-colors">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={s.thumbnail_url} alt="" className="w-full h-20 object-cover rounded-lg" loading="lazy" />
+                {s.media_type === "text"
+                  ? <TextThumb meme={s} className="w-full h-20" />
+                  : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={s.thumbnail_url} alt="" className="w-full h-20 object-cover rounded-lg" loading="lazy" />
+                  )}
                 <div className="aura-num text-[11px] mt-1.5" style={{ color: "var(--lime)" }}>{s.dna_match}% match</div>
                 <div className="text-[10px] truncate muted">{s.caption}</div>
               </Link>
@@ -361,8 +438,12 @@ function MiniStat({ label, value }: { label: string; value: string }) {
 function EvolutionNode({ meme, tag }: { meme: MemeView; tag: string }) {
   return (
     <Link href={`/meme/${meme.id}`} className="neo-sm p-2 w-28 text-center hover:border-[var(--lime)] transition-colors">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={meme.thumbnail_url} alt="" className="w-full h-20 object-cover rounded-lg" loading="lazy" />
+      {meme.media_type === "text"
+        ? <TextThumb meme={meme} className="w-full h-20" />
+        : (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={meme.thumbnail_url} alt="" className="w-full h-20 object-cover rounded-lg" loading="lazy" />
+        )}
       <div className="text-[9px] hd font-bold mt-1 muted uppercase">{tag}</div>
       <div className="text-[10.5px] font-bold truncate">{meme.caption}</div>
       <div className="aura-num text-[11px]">{fmtAura(meme.current_price)}</div>

@@ -8,6 +8,7 @@ import { api, fmtAura, fmtPct, timeAgo, useApi, useSession, useToast } from "@/l
 import type { MemeView } from "@/lib/types";
 import { ChangePct, EmptyState, NeoCard, Skeleton } from "@/components/ui";
 import { InvestSheet, SellSheet } from "@/components/meme";
+import { TextThumb } from "@/components/text-meme";
 
 interface VaultData {
   balance: number;
@@ -214,8 +215,12 @@ export default function VaultPage() {
               {data.holdings.map((h) => (
                 <NeoCard key={h.meme.id} className="p-2.5 flex items-center gap-3">
                   <Link href={`/meme/${h.meme.id}`}>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={h.meme.thumbnail_url} alt="" className="w-12 h-12 rounded-xl object-cover" />
+                    {h.meme.media_type === "text"
+                      ? <TextThumb meme={h.meme} className="w-12 h-12" />
+                      : (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={h.meme.thumbnail_url} alt="" className="w-12 h-12 rounded-xl object-cover" />
+                      )}
                   </Link>
                   <div className="flex-1 min-w-0">
                     <Link href={`/meme/${h.meme.id}`} className="font-bold text-[13.5px] line-clamp-1 hover:underline">{h.meme.caption}</Link>

@@ -584,6 +584,53 @@ export async function setCachedProfile(username: string, data: any): Promise<voi
   } catch {}
 }
 
+// ---------------------------------------------------------------- Post Creation Cache Seed
+/** Fold a freshly created post (e.g. a text meme) into existing caches
+ * without refetching: detail cache + prepend to known feed tabs, and tell
+ * other tabs about it. Server response is authoritative — call only after
+ * a successful POST. */
+export async function seedPostToCaches(meme: any): Promise<void> {
+  if (!meme?.id) return;
+  setMemoryCache(`meme:${meme.id}`, meme);
+  const db = await openClientDb();
+  if (db) {
+    try {
+      db.transaction("memes", "readwrite").objectStore("memes").put({ id: meme.id, data: meme, timestamp: Date.now() });
+    } catch {}
+  }
+  for (const tab of ["foryou", "new", "mix"]) {
+    const mem = getMemoryCache<any[]>(`feed:${tab}`);
+    if (mem && mem.length > 0 && !mem.some((m) => m.id === meme.id)) {
+      await setCachedFeed(tab, [meme, ...mem]);
+    }
+  }
+  broadcastSync({ type: "POST_MUTATED", memeId: meme.id, patch: meme });
+}
+
+/** Remove a post from feed caches after a delete. */
+export async function removePostFromCaches(memeId: string): Promise<void> {
+  for (const tab of ["foryou", "new", "mix", "trending", "following"]) {
+    const mem = getMemoryCache<any[]>(`feed:${tab}`);
+    if (mem) setMemoryCache(`feed:${tab}`, mem.filter((m) => m.id !== memeId));
+  }
+  deleteMemoryCache(`meme:${memeId}`);
+  const db = await openClientDb();
+  if (!db) return;
+  try {
+    const tx = db.transaction(["memes", "feed"], "readwrite");
+    tx.objectStore("memes").delete(memeId);
+    const feedStore = tx.objectStore("feed");
+    const req = feedStore.getAll();
+    req.onsuccess = () => {
+      for (const row of req.result ?? []) {
+        if (Array.isArray(row.memes) && row.memes.some((m: any) => m.id === memeId)) {
+          feedStore.put({ ...row, memes: row.memes.filter((m: any) => m.id !== memeId) });
+        }
+      }
+    };
+  } catch {}
+}
+
 // ---------------------------------------------------------------- Periodic cleanup trigger on load
 if (typeof window !== "undefined") {
   setTimeout(() => {

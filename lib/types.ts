@@ -1,6 +1,6 @@
 // AURA shared types — used by both server services and client components.
 
-export type MediaType = "image" | "video";
+export type MediaType = "image" | "video" | "text";
 export type UserRole = "user" | "admin";
 export type MemeStatus = "live" | "removed";
 export type HeatLevel = "COLD" | "WARM" | "HOT" | "VIRAL" | "LEGENDARY";
@@ -299,7 +299,7 @@ export interface ChatReplyRef {
   type: ChatMessage["type"];
   content: string;
   sticker_id: string | null;
-  post: { id: string; caption: string; thumbnail_url: string } | null;
+  post: { id: string; caption: string; thumbnail_url: string; media_type?: string } | null;
 }
 
 // one user holds at most ONE reaction per message (a new choice replaces the old)

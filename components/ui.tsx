@@ -121,12 +121,16 @@ function unlockBodyScroll() {
   }
 }
 
-export function Sheet({ open, onClose, children, label }: { open: boolean; onClose: () => void; children: React.ReactNode; label: string }) {
+export function Sheet({ open, onClose, children, label, dark = false }: { open: boolean; onClose: () => void; children: React.ReactNode; label: string; dark?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   // Stay mounted through the exit animation instead of vanishing (flicker).
   const [mounted, setMounted] = useState(open);
   const [closing, setClosing] = useState(false);
   const isLocked = useRef(false);
+  // keep the latest close handler without re-running the open lifecycle —
+  // re-running it would steal focus from inputs on every parent re-render
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
   useEffect(() => {
     if (open) {
@@ -136,7 +140,7 @@ export function Sheet({ open, onClose, children, label }: { open: boolean; onClo
         lockBodyScroll();
         isLocked.current = true;
       }
-      const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+      const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCloseRef.current(); };
       document.addEventListener("keydown", onKey);
       ref.current?.focus();
       return () => {
@@ -155,7 +159,8 @@ export function Sheet({ open, onClose, children, label }: { open: boolean; onClo
     setClosing(true);
     const t = setTimeout(() => { setMounted(false); setClosing(false); }, 240);
     return () => clearTimeout(t);
-  }, [open, onClose, mounted]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, mounted]);
 
   // Always ensure cleanup on unmount
   useEffect(() => {
@@ -172,7 +177,7 @@ export function Sheet({ open, onClose, children, label }: { open: boolean; onClo
   return createPortal(
     <div className={`sheet-backdrop ${closing ? "closing" : ""}`} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div
-        className={`sheet ${closing ? "sheet-closing" : ""}`}
+        className={`sheet ${dark ? "sheet-dark" : ""} ${closing ? "sheet-closing" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label={label}

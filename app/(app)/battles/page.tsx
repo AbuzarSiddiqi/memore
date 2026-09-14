@@ -7,6 +7,7 @@ import type { MemeView } from "@/lib/types";
 import { HeatPill, InvestSheet } from "@/components/meme";
 import { NavIcon } from "@/components/nav";
 import { NeoButton, Skeleton } from "@/components/ui";
+import { TextPostBody } from "@/components/text-meme";
 
 interface BattleData {
   battle: {
@@ -123,8 +124,12 @@ function BattleCard({ meme, side, staked, disabled, onStake }: {
     <div>
       <Link href={`/meme/${meme.id}`} className="block">
         <div className="relative rounded-2xl overflow-hidden" style={{ outline: staked ? "3px solid var(--lime)" : "none", outlineOffset: 2 }}>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={meme.thumbnail_url} alt={meme.caption} className="w-full aspect-square object-cover" />
+          {meme.media_type === "text" ? (
+            <TextPostBody meme={meme} className="aspect-square overflow-hidden" />
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={meme.thumbnail_url} alt={meme.caption} className="w-full aspect-square object-cover" />
+          )}
         </div>
         <p className="text-[12.5px] font-bold mt-2 line-clamp-1 text-center">{meme.caption}</p>
       </Link>

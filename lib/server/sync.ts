@@ -35,6 +35,32 @@ export function toCanonicalUuid(userId: string): string {
   return userId;
 }
 
+// ---- text-meme table-sync capability -------------------------------------
+// The memes table may predate text posts (media_type check constraint). When
+// it rejects them, text memes keep persisting through the local store plus
+// the Supabase Storage snapshot; running database/migration_v3_text_posts.sql
+// flips this back on without a code change.
+let textTableSyncSupported: boolean | null = null; // null = not probed yet
+
+export function shouldAttemptTextTableSync(): boolean {
+  return textTableSyncSupported !== false;
+}
+
+export function noteTextTableSyncResult(err: { message?: string } | null): void {
+  if (!err) {
+    textTableSyncSupported = true;
+    return;
+  }
+  const msg = String(err.message ?? "");
+  if (/media_type_check|check constraint|violates check|does not exist/i.test(msg)) {
+    textTableSyncSupported = false;
+    console.warn(
+      "[Supabase Sync] memes table is not text-post ready — text memes persist via local store + Storage snapshot. " +
+      "Run database/migration_v3_text_posts.sql in the Supabase SQL editor to enable table persistence."
+    );
+  }
+}
+
 /** Sync a user holding & updated aura balance to Supabase PostgreSQL */
 export async function syncHoldingToSupabase(holding: Holding, userBalance?: number): Promise<void> {
   const admin = createAdminClient();
@@ -95,10 +121,12 @@ export async function syncTransactionToSupabase(tx: Transaction): Promise<void> 
 export async function syncMemeToSupabase(meme: Meme): Promise<void> {
   const admin = createAdminClient();
   if (!admin) return;
+  // Until the table allows text posts, they ride the Storage snapshot only.
+  if (meme.media_type === "text" && !shouldAttemptTextTableSync()) return;
 
   const canonCreatorId = toCanonicalUuid(meme.creator_id);
   try {
-    await admin.from("memes").upsert(
+    const upsert = await admin.from("memes").upsert(
       {
         id: meme.id,
         creator_id: canonCreatorId,
@@ -143,6 +171,7 @@ export async function syncMemeToSupabase(meme: Meme): Promise<void> {
       },
       { onConflict: "id" }
     );
+    if (meme.media_type === "text") noteTextTableSyncResult(upsert.error ?? null);
   } catch (err) {
     console.error("Supabase syncMeme error:", err);
   }
@@ -361,6 +390,29 @@ export async function syncCallToSupabase(call: AuraCall): Promise<void> {
 
 const CLOUD_STATE_FILE = "cloud_db.json";
 
+// Text memes live in the Storage snapshot when the memes table can't hold them.
+// Cached with a short TTL so background hydration doesn't re-download the whole
+// snapshot every cycle.
+let snapshotTextCache: { memes: Meme[]; at: number } | null = null;
+
+async function loadSnapshotTextMemes(): Promise<Meme[]> {
+  if (snapshotTextCache && Date.now() - snapshotTextCache.at < 5 * 60_000) return snapshotTextCache.memes;
+  try {
+    const admin = createAdminClient();
+    if (!admin) return [];
+    const { data } = await admin.storage.from("system").download(CLOUD_STATE_FILE);
+    if (!data) return [];
+    const parsed = JSON.parse(await data.text()) as DB;
+    const memes = Array.isArray(parsed?.memes)
+      ? parsed.memes.filter((m: Meme) => m && m.media_type === "text" && m.id && m.caption)
+      : [];
+    snapshotTextCache = { memes, at: Date.now() };
+    return memes;
+  } catch {
+    return [];
+  }
+}
+
 /** Persist authoritative cloud snapshot to Supabase Cloud Storage (ensures serverless resilience) */
 export async function persistSnapshotToSupabase(state: DB): Promise<void> {
   const admin = createAdminClient();
@@ -551,9 +603,18 @@ export async function hydrateFromSupabase(): Promise<DB | null> {
         created_at: c.created_at,
       }));
 
+      // Merge text memes that exist only in the Storage snapshot (memes table
+      // may not accept media_type='text' yet) — table rows win on id conflicts.
+      const snapshotText = await loadSnapshotTextMemes();
+      const tableIds = new Set(reconstructedMemes.map((m) => m.id));
+      const mergedMemes = snapshotText.length > 0
+        ? [...snapshotText.filter((m) => !tableIds.has(m.id)), ...reconstructedMemes]
+            .sort((a, b) => b.created_at.localeCompare(a.created_at))
+        : reconstructedMemes;
+
       return {
         users: reconstructedUsers,
-        memes: reconstructedMemes,
+        memes: mergedMemes,
         holdings: reconstructedHoldings,
         transactions: reconstructedTransactions,
         price_history: {},

@@ -6,6 +6,7 @@ import { fmtAura, useApi } from "@/lib/client";
 import type { MemeView } from "@/lib/types";
 import { Sparkline } from "@/components/charts";
 import { NavIcon } from "@/components/nav";
+import { TextThumb } from "@/components/text-meme";
 import { EmptyState, Skeleton } from "@/components/ui";
 
 const TABS = [
@@ -56,8 +57,12 @@ export default function MarketPage() {
         {!loading && rows.map((m, i) => (
           <Link key={m.id} href={`/meme/${m.id}`} className="flex items-center gap-3 p-2.5 -mx-2 rounded-2xl hover:bg-white/[0.04] transition-colors">
             <span className="hd font-extrabold text-[15px] w-5 text-center muted">{i + 1}</span>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={m.thumbnail_url} alt="" className="w-12 h-12 rounded-xl object-cover border border-[var(--line)]" loading="lazy" />
+            {m.media_type === "text"
+              ? <TextThumb meme={m} className="w-12 h-12" />
+              : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={m.thumbnail_url} alt="" className="w-12 h-12 rounded-xl object-cover border border-[var(--line)]" loading="lazy" />
+              )}
             <div className="flex-1 min-w-0">
               <div className="text-[14px] font-bold truncate">{m.caption}</div>
               <div className="flex items-center gap-1.5 mt-0.5">

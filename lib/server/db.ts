@@ -170,8 +170,12 @@ export async function ensureHydrated(force = false): Promise<DB> {
 }
 
 function mergeCloudDbIntoState(s: DB, cloudDb: DB) {
-  // Authoritative memes directly from Supabase PostgreSQL (ordered newest first)
-  s.memes = cloudDb.memes;
+  // Authoritative memes directly from Supabase PostgreSQL (ordered newest first).
+  // Text memes may exist only in the local store / Storage snapshot (table schema
+  // dependent) — never drop them during a cloud merge.
+  const cloudIds = new Set(cloudDb.memes.map((m) => m.id));
+  const localTextMemes = s.memes.filter((m) => m.media_type === "text" && !cloudIds.has(m.id));
+  s.memes = [...localTextMemes, ...cloudDb.memes].sort((a, b) => b.created_at.localeCompare(a.created_at));
 
   // Merge users/profiles
   for (const cu of cloudDb.users) {

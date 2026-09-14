@@ -358,7 +358,7 @@ export function getChatDetail(
       type: t.type,
       content: t.content,
       sticker_id: t.sticker_id ?? null,
-      post: post ? { id: post.id, caption: post.caption, thumbnail_url: post.thumbnail_url } : null,
+      post: post ? { id: post.id, caption: post.caption, thumbnail_url: post.thumbnail_url, media_type: post.media_type } : null,
     };
   };
   const messages: ChatMessageView[] = convMessages.map((m) => ({

@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { db, uid, save, ensureHydrated } from "@/lib/server/db";
+import { db, uid, save, persistNow, ensureHydrated } from "@/lib/server/db";
 import { ok, fail, humanError, requireUser, rateLimit } from "@/lib/server/http";
 import { getFeed, type FeedTab } from "@/lib/server/feed";
 import { memeView, publicUser } from "@/lib/server/views";
@@ -7,6 +7,9 @@ import { eventAndSeason } from "@/lib/server/feed";
 import { pushNotification, checkAchievements } from "@/lib/server/notify";
 import { trackMission } from "@/lib/server/progression";
 import { priceFromNet } from "@/lib/server/market";
+import { shouldAttemptTextTableSync, noteTextTableSyncResult } from "@/lib/server/sync";
+import { TEXT_POST_LIMIT, TEXT_POST_MIN } from "@/lib/limits";
+import { oneLine, parseHashtags } from "@/lib/text";
 import type { Meme } from "@/lib/types";
 
 const TABS: FeedTab[] = ["foryou", "following", "trending", "new", "rising", "undervalued", "hunter", "chaos", "saved", "mix"];
@@ -41,18 +44,27 @@ export async function POST(req: NextRequest) {
     if (!rateLimit(`create:${user.id}`, 8, 60_000)) return fail("Easy there — too many posts in a minute.", 429);
     const body = await req.json();
     const caption = String(body.caption ?? "").trim();
-    const category = String(body.category ?? "").trim();
-    const media_type = body.media_type === "video" ? "video" : "image";
+    const media_type = body.media_type === "video" ? "video" : body.media_type === "text" ? "text" : "image";
     const media_url = String(body.media_url ?? "");
     const parent_meme_id = body.parent_meme_id ? String(body.parent_meme_id) : null;
-    const tags = Array.isArray(body.tags)
-      ? body.tags.slice(0, 6).map((t: string) => String(t).toLowerCase().replace(/[^a-z0-9_]/g, "")).filter(Boolean)
-      : [];
     const description = String(body.description ?? "").slice(0, 280);
 
-    if (caption.length < 3) return fail("Give your meme a caption (3+ chars).");
+    if (media_type === "text") {
+      // TEXT MEME — the text itself is the content and lives in `caption`
+      // (existing convention). Server-authoritative length checks: never
+      // silently truncate, reject instead.
+      if (caption.length < TEXT_POST_MIN) return fail("Write something first — even one unhinged line.");
+      if (caption.length > TEXT_POST_LIMIT) return fail(`Text memes cap at ${TEXT_POST_LIMIT} characters. Trim the take.`);
+    } else {
+      if (caption.length < 3) return fail("Give your meme a caption (3+ chars).");
+    }
+    const category = String(body.category ?? "").trim() || "chaos";
+    const bodyTags = Array.isArray(body.tags)
+      ? body.tags.slice(0, 6).map((t: string) => String(t).toLowerCase().replace(/[^a-z0-9_]/g, "")).filter(Boolean)
+      : [];
+    const tags = [...new Set([...bodyTags, ...parseHashtags(caption)])].slice(0, 6);
     if (!CATEGORIES.includes(category)) return fail("Pick a category.");
-    if (!media_url) return fail("Upload media first.");
+    if (media_type !== "text" && !media_url) return fail("Upload media first.");
     if (media_type === "video" && !media_url.startsWith("/api/media/") && !media_url.startsWith("http"))
       return fail("Video upload failed. Try again.");
 
@@ -90,19 +102,25 @@ export async function POST(req: NextRequest) {
       parent.remix_count += 1;
       trackMission(user.id, "remix", meme.id);
       if (parent.creator_id !== user.id) {
-        pushNotification(parent.creator_id, "remix", `🔄 ${user.username} remixed your meme`, `"${parent.caption}" just got a remix: "${caption}"`, meme.id);
+        pushNotification(parent.creator_id, "remix", `🔄 ${user.username} remixed your meme`, `"${oneLine(parent.caption)}" just got a remix: "${oneLine(caption)}"`, meme.id);
       }
     }
 
-    pushNotification(user.id, "achievement", "🚨 MEME LAUNCHED", `"${caption}" entered the Aura Market at ✦20.`, meme.id);
+    pushNotification(user.id, "achievement", "🚨 MEME LAUNCHED", `"${oneLine(caption)}" entered the Aura Market at ✦20.`, meme.id);
     checkAchievements(user.id);
     save();
+    // text memes persist through the snapshot channel — upload it immediately
+    // instead of waiting out the 400ms save debounce
+    if (meme.media_type === "text") persistNow();
 
-    // Sync directly to Supabase
+    // Sync directly to Supabase. Text memes only sync to the table when its
+    // schema allows them (see database/migration_v3_text_posts.sql); otherwise
+    // they persist through the local store + Supabase Storage snapshot via save().
     try {
+      const skipTable = meme.media_type === "text" && !shouldAttemptTextTableSync();
       const { createAdminClient } = await import("@/lib/supabase/admin");
       const admin = createAdminClient();
-      if (admin) {
+      if (admin && !skipTable) {
         let creatorUuid = user.id;
         const { data: prof } = await admin.from("profiles").select("id").eq("email", user.email).maybeSingle();
         if (prof?.id) {
@@ -129,7 +147,7 @@ export async function POST(req: NextRequest) {
           }, { onConflict: "id" });
         }
 
-        await admin.from("memes").upsert({
+        const upsert = await admin.from("memes").upsert({
           id: meme.id,
           creator_id: creatorUuid,
           caption: meme.caption,
@@ -154,7 +172,8 @@ export async function POST(req: NextRequest) {
           dna_absurdity: meme.dna.absurdity,
           created_at: meme.created_at,
           updated_at: meme.updated_at,
-        }, { onConflict: "id" });
+        }, { onConflict: "id" }).select("id").maybeSingle();
+        if (upsert.error && meme.media_type === "text") noteTextTableSyncResult(upsert.error);
 
         // Ensure in-memory state and cloud state are immediately synchronized
         await ensureHydrated(true);

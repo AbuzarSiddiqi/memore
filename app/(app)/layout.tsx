@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useSession } from "@/lib/client";
 import { BottomNav, SideNav, AppHeader, RightRail } from "@/components/nav";
 import { MemoreMark, MemoreWordmark } from "@/components/brand";
+import { PostButton } from "@/components/post-button";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, loading } = useSession();
@@ -38,6 +39,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       </div>
       <RightRail />
       <BottomNav />
+      <PostButton />
     </div>
   );
 }

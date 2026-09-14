@@ -189,8 +189,12 @@ function QuoteInline({ refr, mine, username, onJump }: { refr: ChatReplyRef; min
       className={`mb-1 flex w-full items-center gap-1.5 border-l-2 pl-1.5 text-left ${mine ? "border-[#0a0a0a]/50" : "border-[#7C4DFF]"}`}
     >
       {refr.post && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={refr.post.thumbnail_url} alt="" className="h-4 w-4 rounded-[3px] object-cover" loading="lazy" />
+        refr.post.media_type === "text"
+          ? <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] bg-[#141414] font-display text-[8px] font-extrabold text-[#C8FF3D]">Aa</span>
+          : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={refr.post.thumbnail_url} alt="" className="h-4 w-4 rounded-[3px] object-cover" loading="lazy" />
+          )
       )}
       <span className="truncate text-[10.5px] font-bold text-[#C8FF3D]">
         ↳ {mine ? "you" : `@${username}`} · {quoteText(refr)}
@@ -933,8 +937,12 @@ export default function ChatPage() {
                               >
                                 <div className="flex items-center gap-1">
                                   {m.reply_to.post && (
-                                    // eslint-disable-next-line @next/next/no-img-element
-                                    <img src={m.reply_to.post.thumbnail_url} alt="" className="h-3.5 w-3.5 rounded-[3px] object-cover" loading="lazy" />
+                                    m.reply_to.post.media_type === "text"
+                                      ? <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] bg-[#141414] font-display text-[7px] font-extrabold text-[#C8FF3D]">Aa</span>
+                                      : (
+                                        // eslint-disable-next-line @next/next/no-img-element
+                                        <img src={m.reply_to.post.thumbnail_url} alt="" className="h-3.5 w-3.5 rounded-[3px] object-cover" loading="lazy" />
+                                      )
                                   )}
                                   <span className={`truncate text-[10px] font-bold ${b.run.mine ? "text-[#0a0a0a]/60" : "text-[#C8FF3D]"}`}>
                                     ↳ {b.run.mine ? "you" : `@${detail?.other.username ?? ""}`} · {quoteText(m.reply_to)}
@@ -1124,8 +1132,12 @@ function PostPickerSheet({ open, onClose, onPicked }: { open: boolean; onClose: 
 
   const row = (m: MemeView) => (
     <button key={m.id} className="w-full flex items-center gap-3 p-2 rounded-2xl hover:bg-white/5 text-left" onClick={() => onPicked(m.id)}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={m.thumbnail_url} alt="" className="w-11 h-11 object-cover rounded-xl" loading="lazy" />
+      {m.media_type === "text"
+        ? <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#141414] border border-[#2d2d2d] font-display text-[15px] font-extrabold text-[#C8FF3D]">Aa</span>
+        : (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={m.thumbnail_url} alt="" className="w-11 h-11 object-cover rounded-xl" loading="lazy" />
+        )}
       <span className="min-w-0 flex-1">
         <span className="block font-bold text-[13px] truncate">{m.caption}</span>
         <span className="block text-[11px] muted aura-num">✦ {m.current_price}</span>
@@ -1174,15 +1186,23 @@ function SharedBubble({ meme, onInvest, onShare }: { meme: MemeView; onInvest: (
       <div className="relative px-3 pt-2 pb-2.5">
         <div className="mb-1.5 flex items-center justify-between">
           <span className="flex items-center gap-1.5 text-[9.5px] font-bold tracking-[0.16em] text-white/70">
-            <Spark size={10} color="#C8FF3D" /> MEMORE POST
+            <Spark size={10} color="#C8FF3D" /> {meme.media_type === "text" ? "TEXT MEME" : "MEMORE POST"}
           </span>
           <Icon name="dots" size={12} strokeWidth={2.6} className="text-white/45" />
         </div>
-        <Link href={`/meme/${meme.id}`} className="block">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={meme.thumbnail_url} alt={meme.caption} className="h-[128px] w-full rounded-md object-cover" loading="lazy" />
-        </Link>
-        {meme.caption && <p className="mt-1.5 truncate text-[14px] text-white">&ldquo;{meme.caption}&rdquo;</p>}
+        {meme.media_type === "text" ? (
+          <Link href={`/meme/${meme.id}`} className="block select-text">
+            <p className="font-display font-semibold text-[13.5px] leading-snug whitespace-pre-wrap text-white line-clamp-7">{meme.caption}</p>
+          </Link>
+        ) : (
+          <>
+            <Link href={`/meme/${meme.id}`} className="block">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={meme.thumbnail_url} alt={meme.caption} className="h-[128px] w-full rounded-md object-cover" loading="lazy" />
+            </Link>
+            {meme.caption && <p className="mt-1.5 truncate text-[14px] text-white">&ldquo;{meme.caption}&rdquo;</p>}
+          </>
+        )}
         <div className="mt-1.5 flex items-center gap-2">
           <span className="flex items-center gap-1 text-[#C8FF3D]">
             <Spark size={12} color="#C8FF3D" />

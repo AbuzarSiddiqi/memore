@@ -6,6 +6,7 @@ import { fmtAura, fmtNum, useApi } from "@/lib/client";
 import type { MemeView } from "@/lib/types";
 import { NavIcon } from "@/components/nav";
 import { ChangePct, EmptyState, Skeleton } from "@/components/ui";
+import { TextThumb } from "@/components/text-meme";
 
 const TABS = [
   { id: "hunter", label: "Early Signals" },
@@ -45,8 +46,12 @@ export default function HunterPage() {
         )}
         {!loading && rows.map((m) => (
           <Link key={m.id} href={`/meme/${m.id}`} className="neo-sm p-2.5 flex items-center gap-3 hover:border-[var(--lime)] transition-colors">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={m.thumbnail_url} alt="" className="w-[52px] h-[52px] rounded-xl object-cover" loading="lazy" />
+            {m.media_type === "text"
+              ? <TextThumb meme={m} className="w-[52px] h-[52px]" />
+              : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={m.thumbnail_url} alt="" className="w-[52px] h-[52px] rounded-xl object-cover" loading="lazy" />
+              )}
             <div className="flex-1 min-w-0">
               <div className="text-[13.5px] font-bold truncate">{m.caption}</div>
               <div className="text-[11px] muted mt-0.5">{fmtNum(m.views)} views · {m.investor_count} investors</div>
