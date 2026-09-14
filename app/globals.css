@@ -103,7 +103,8 @@
   left: 4px;
   right: 4px;
   top: 4px;
-  height: calc(100dvh - 8px);
+  height: calc(100lvh - 8px);
+  height: calc(100vh - 8px);
   border: 1.5px solid rgba(124, 77, 255, 0.42);
   border-radius: min(44px, max(14px, env(safe-area-inset-top, 44px)));
   pointer-events: none;

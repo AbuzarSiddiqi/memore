@@ -229,7 +229,7 @@ export default function ChatPage() {
   const [attach, setAttach] = useState(false);
   const screenRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
-  const fullHeightRef = useRef<number>(0);
+  const initialScreenHeightRef = useRef<number>(0);
   const [animatingMsgIds, setAnimatingMsgIds] = useState<Record<string, "zuup" | "receive" | "unsend" | "sticker">>({});
   const [doubleTapBurst, setDoubleTapBurst] = useState<{ msgId: string; x: number; y: number } | null>(null);
   const isNearBottomRef = useRef(true);
@@ -407,18 +407,25 @@ export default function ChatPage() {
     if (!el) return;
 
     if (typeof window !== "undefined") {
-      fullHeightRef.current = window.innerHeight;
+      initialScreenHeightRef.current = Math.max(
+        window.innerHeight,
+        window.screen?.height || 0
+      );
     }
 
     const syncViewport = () => {
       const vv = window.visualViewport;
+      const screenH = initialScreenHeightRef.current > 0
+        ? initialScreenHeightRef.current
+        : (typeof window !== "undefined" ? Math.max(window.innerHeight, window.screen?.height || 0) : 844);
+
       if (!vv) {
         el.style.setProperty("--chat-vh", "100dvh");
         el.style.setProperty("--chat-top", "0px");
         el.style.setProperty("--chat-bottom-padding", "env(safe-area-inset-bottom, 0px)");
         if (frameRef.current) {
           frameRef.current.style.top = "4px";
-          frameRef.current.style.height = "calc(100dvh - 8px)";
+          frameRef.current.style.height = `${screenH - 8}px`;
         }
         return;
       }
@@ -427,22 +434,23 @@ export default function ChatPage() {
       el.style.setProperty("--chat-vh", `${h}px`);
       el.style.setProperty("--chat-top", `${top}px`);
 
-      const isKeyboardOpen = window.innerHeight - h > 100;
+      // Keyboard is open if visual viewport height is significantly smaller than physical screen height
+      const isKeyboardOpen = screenH - h > 100;
       el.style.setProperty(
         "--chat-bottom-padding",
         isKeyboardOpen ? "0px" : "env(safe-area-inset-bottom, 0px)"
       );
 
-      // Only update full screen height when the keyboard is CLOSED
-      if (!isKeyboardOpen && window.innerHeight > 300) {
-        fullHeightRef.current = window.innerHeight;
+      // Only update physical screen height if user rotated/resized while keyboard is NOT open
+      if (!isKeyboardOpen && window.innerHeight > 400) {
+        initialScreenHeightRef.current = Math.max(window.innerHeight, window.screen?.height || 0);
       }
 
-      // The purple frame stays anchored to the device corners and NEVER shrinks with the keyboard!
+      // The purple screen frame is the physical device outline:
+      // It remains fixed to the outer glass corners and NEVER shrinks with the keyboard!
       if (frameRef.current) {
-        const frameH = fullHeightRef.current > 0 ? fullHeightRef.current : window.innerHeight;
         frameRef.current.style.top = `${top + 4}px`;
-        frameRef.current.style.height = `${frameH - 8}px`;
+        frameRef.current.style.height = `${screenH - 8}px`;
       }
 
       // Keep newest messages visible only if user was already at the bottom
