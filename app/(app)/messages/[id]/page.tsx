@@ -395,18 +395,17 @@ export default function ChatPage() {
     };
   }, []);
 
-  // 2. Keyboard handling. The root FOLLOWS THE VISUAL VIEWPORT. When the
-  // keyboard opens, iOS shrinks visualViewport.height AND pans the visual
-  // viewport up (vv.offsetTop) to reveal the focused input — and every
-  // position:fixed element rides that pan (the header sliding under the status
-  // bar, the composer stranded at the top). Anchoring the root to the panned,
-  // shrunk visual viewport — top = pageYOffset + vv.offsetTop, height =
-  // vv.height — cancels the pan VISUALLY: the header stays glued to the top of
-  // the screen, the message list shrinks, and the composer lands exactly on
-  // the keyboard edge with zero gap. Works identically on Safari, the iOS PWA,
-  // Android (where the layout viewport resizes instead) and desktop. No
-  // transforms, no scrollTo resets, no fighting the browser: whatever iOS
-  // does to the viewport, the root overlays exactly what the user can see.
+  // 2. Keyboard handling — THE RULE: trust sizes, never positions.
+  // The root is glued to the TOP of the layout viewport (top: 0; the header
+  // physically cannot move) and JS drives exactly one value: --chat-bottom,
+  // the keyboard's overlap with the layout viewport,
+  //     max(0, window.innerHeight − visualViewport.height).
+  // On platforms where the keyboard resizes the viewport (Android, iOS 18+)
+  // that difference is 0 and pure CSS lays everything out; on older iOS it is
+  // the keyboard height and the root's bottom edge rides the keyboard. iOS's
+  // keyboard PAN (vv.offsetTop / scrollY) is deliberately ignored: it is an
+  // elastic, self-reverting register and reacting to it is what made the UI
+  // bounce and drift. No positions are read or written, ever.
   useEffect(() => {
     const el = screenRef.current;
     if (!el) return;
@@ -422,16 +421,11 @@ export default function ChatPage() {
       rafId = requestAnimationFrame(() => {
         const vv = window.visualViewport;
         if (!vv) {
-          el.style.setProperty("--vv-top", "0px");
-          el.style.setProperty("--vv-h", "100%");
+          el.style.setProperty("--chat-bottom", "0px");
           return;
         }
 
-        // The visual viewport's top edge, in the layout coordinates that a
-        // position:fixed element is positioned in. iOS's keyboard pan
-        // (vv.offsetTop) and any window scroll are both absorbed here.
-        el.style.setProperty("--vv-top", `${(window.pageYOffset || 0) + vv.offsetTop}px`);
-        el.style.setProperty("--vv-h", `${vv.height}px`);
+        el.style.setProperty("--chat-bottom", `${Math.max(0, window.innerHeight - vv.height)}px`);
 
         // Track the tallest idle visual viewport height as the keyboard-closed
         // baseline — never let it decrease while an editable is focused.
@@ -453,24 +447,16 @@ export default function ChatPage() {
 
     syncViewport();
 
+    // Size events only. Scroll events (vv or window) carry the pan, which we
+    // ignore by design — listening to them accomplishes nothing here.
     const vv = window.visualViewport;
-    if (vv) {
-      vv.addEventListener("resize", syncViewport);
-      vv.addEventListener("scroll", syncViewport); // iOS pans the visual viewport on focus
-    }
+    vv?.addEventListener("resize", syncViewport);
     window.addEventListener("resize", syncViewport);
-    // Some iOS versions deliver the pan as a plain window scroll instead of a
-    // vv scroll event. Following it is harmless where nothing scrolled.
-    window.addEventListener("scroll", syncViewport, { passive: true });
 
     return () => {
       cancelAnimationFrame(rafId);
-      if (vv) {
-        vv.removeEventListener("resize", syncViewport);
-        vv.removeEventListener("scroll", syncViewport);
-      }
+      vv?.removeEventListener("resize", syncViewport);
       window.removeEventListener("resize", syncViewport);
-      window.removeEventListener("scroll", syncViewport);
     };
   }, []);
 
