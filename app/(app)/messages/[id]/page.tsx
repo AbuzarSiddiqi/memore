@@ -87,25 +87,74 @@ function HeaderClock({ tempChat }: { tempChat: boolean }) {
   );
 }
 
-/** Wobbly ink bubble — one shared shape for the whole design system, only the
- * ink changes: lime for yours, purple-framed charcoal for theirs. The tail
- * (first message of a group) is a small flick, not a speech-bubble beak. */
+/** Wobbly ink bubble — scales seamlessly to ANY height without clipping text.
+ * Mine is lime with dark charcoal ink stroke, theirs is dark charcoal with purple stroke.
+ * Tail flick is anchored precisely at the bottom corner. */
 function BubbleFrame({ mine, tail }: { mine: boolean; tail: boolean }) {
-  const paths = {
-    plain:
-      "M9 3.4 C 28 1.8, 72 1.6, 91 3.4 C 96.6 4.8, 98.4 9.6, 98 17 C 98.5 24.5, 97 32.2, 90.5 34.9 C 72 37.6, 28 37.8, 9.5 35 C 3.6 33.4, 1.6 27.5, 2.1 19.5 C 1.7 11.5, 3.6 5, 9 3.4 Z",
-    left:
-      "M9.5 3.3 C 28 1.7, 72 1.6, 91 3.4 C 96.6 4.8, 98.4 9.6, 98 17 C 98.5 24.5, 97 32.2, 90.5 34.9 C 72 37.6, 30 37.8, 12 35.2 C 9.4 34.9, 6.6 36.6, 3.2 39.2 C 4.6 36.2, 4.8 34.6, 4.2 33 C 2.6 30.4, 1.7 25.5, 2.1 19.5 C 1.7 11.5, 4 4.8, 9.5 3.3 Z",
-    right:
-      "M90.5 3.3 C 72 1.7, 28 1.6, 9 3.4 C 3.4 4.8, 1.6 9.6, 2 17 C 1.5 24.5, 3 32.2, 9.5 34.9 C 28 37.6, 70 37.8, 88 35.2 C 90.6 34.9, 93.4 36.6, 96.8 39.2 C 95.4 36.2, 95.2 34.6, 95.8 33 C 97.4 30.4, 98.3 25.5, 97.9 19.5 C 98.3 11.5, 96 4.8, 90.5 3.3 Z",
-  };
+  const bg = mine ? "bg-[#C8FF3D]" : "bg-[#161616]";
+  const border = mine ? "border-[rgba(10,10,10,0.72)]" : "border-[#7C4DFF]";
+  // Asymmetric hand-drawn radii:
+  const radii = mine
+    ? tail
+      ? "rounded-[19px_17px_4px_18px/17px_19px_18px_4px]"
+      : "rounded-[19px_17px_18px_18px/17px_19px_18px_17px]"
+    : tail
+      ? "rounded-[17px_19px_18px_4px/19px_17px_4px_18px]"
+      : "rounded-[17px_19px_18px_17px/19px_17px_17px_18px]";
+
   return (
-    <svg viewBox="0 0 100 40" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
+    <div
+      className={`pointer-events-none absolute inset-0 ${bg} ${border} ${radii} border-[1.7px]`}
+      aria-hidden
+    >
+      {tail && (
+        <svg
+          viewBox="0 0 12 12"
+          className={`absolute -bottom-[5px] h-3 w-3 ${mine ? "-right-[4px]" : "-left-[4px]"}`}
+          aria-hidden
+        >
+          {mine ? (
+            <path d="M2 2 C 5 7, 8 9, 11 11 C 9 7, 7 4, 6 2 Z" fill="#C8FF3D" stroke="rgba(10,10,10,0.72)" strokeWidth="1.7" strokeLinejoin="round" />
+          ) : (
+            <path d="M10 2 C 7 7, 4 9, 1 11 C 3 7, 5 4, 6 2 Z" fill="#161616" stroke="#7C4DFF" strokeWidth="1.7" strokeLinejoin="round" />
+          )}
+        </svg>
+      )}
+    </div>
+  );
+}
+
+/** Dynamic hand-drawn purple doodle border for the composer input wrapper.
+ * The SVG path fits the measured width and height, preserving 18px wobbly corner curves
+ * and subtle natural waviness along top/bottom/sides, so text NEVER escapes the border. */
+function ComposerDoodleBorder({ width, height }: { width: number; height: number }) {
+  const w = Math.max(width, 60);
+  const h = Math.max(height, 42);
+  const d = `
+    M 18 2.5
+    C ${w * 0.3} 1.6, ${w * 0.7} 3.2, ${w - 18} 2.4
+    C ${w - 6} 2, ${w - 1.5} 7, ${w - 1.8} 18
+    C ${w - 2.2} ${h * 0.45}, ${w - 1.6} ${h * 0.75}, ${w - 2} ${h - 18}
+    C ${w - 2.2} ${h - 6}, ${w - 7} ${h - 1.8}, ${w - 18} ${h - 2.4}
+    C ${w * 0.7} ${h - 3}, ${w * 0.3} ${h - 1.6}, 18 ${h - 2.5}
+    C 7 ${h - 2.2}, 1.8 ${h - 7}, 2.2 ${h - 18}
+    C 2.4 ${h * 0.55}, 1.6 ${h * 0.3}, 2 18
+    C 1.8 7, 7 2.2, 18 2.5 Z
+  `;
+
+  return (
+    <svg
+      viewBox={`0 0 ${w} ${h}`}
+      className="pointer-events-none absolute inset-0 h-full w-full"
+      aria-hidden
+    >
       <path
-        d={tail ? (mine ? paths.right : paths.left) : paths.plain}
-        fill={mine ? "#C8FF3D" : "#161616"}
-        stroke={mine ? "rgba(10,10,10,0.72)" : "#7C4DFF"}
-        strokeWidth="1.7" strokeLinejoin="round" vectorEffect="non-scaling-stroke"
+        d={d}
+        fill="#101010"
+        stroke="rgba(124,77,255,0.92)"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );
@@ -226,6 +275,8 @@ export default function ChatPage() {
   const screenRef = useRef<HTMLDivElement | null>(null);
   const headerRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLDivElement | null>(null);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const [wrapperSize, setWrapperSize] = useState({ width: 0, height: 42 });
   const [animatingMsgIds, setAnimatingMsgIds] = useState<Record<string, "zuup" | "receive" | "unsend" | "sticker">>({});
   const [doubleTapBurst, setDoubleTapBurst] = useState<{ msgId: string; x: number; y: number } | null>(null);
   const isNearBottomRef = useRef(true);
@@ -395,17 +446,16 @@ export default function ChatPage() {
     };
   }, [id]);
 
-  // 1. The chat is a NORMAL scrolling page — the same architecture as every
-  // website that works on an iPhone: a sticky header, messages in the page
-  // flow, a sticky composer, and iOS's own keyboard handling. The page scrolls
-  // when the keyboard opens (exactly like a plain website), the header and
-  // composer stick to the viewport, and no code fights the OS — the source of
-  // every previous failure is simply gone. Only scroll bookkeeping remains.
-  // The header and composer are fixed overlays; measure their heights (they
-  // change with the safe-area, the reply bar and the temp label) and reserve
-  // matching bands on the root so no message ever hides behind them.
-  const scrollToEnd = useCallback(() => {
-    window.scrollTo(0, document.documentElement.scrollHeight);
+  // 1. Independent message scroller — only listRef scrolls, never window or document.
+  const scrollToEnd = useCallback((smooth = false) => {
+    const el = listRef.current;
+    if (el) {
+      if (smooth) {
+        el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      } else {
+        el.scrollTop = el.scrollHeight;
+      }
+    }
   }, []);
 
   // Dynamic font sizing with hysteresis:
@@ -442,7 +492,7 @@ export default function ChatPage() {
     const el = textareaRef.current;
     if (!el) return;
 
-    // Temporarily reset height to auto to measure unconstrained scrollHeight
+    // Reset height to auto to measure actual scrollHeight
     el.style.height = "auto";
     const scrollH = el.scrollHeight;
 
@@ -459,7 +509,7 @@ export default function ChatPage() {
     const isOverflowing = scrollH > MAX_H;
     el.style.overflowY = isOverflowing ? "auto" : "hidden";
 
-    // Keep newest typed line visible if typing near the end
+    // Keep newest typed line visible when typing near the end
     if (isOverflowing && el.selectionEnd >= el.value.length - 2) {
       el.scrollTop = el.scrollHeight;
     }
@@ -474,44 +524,102 @@ export default function ChatPage() {
     return () => window.removeEventListener("resize", adjustTextareaHeight);
   }, [adjustTextareaHeight]);
 
-  // 1. The header and composer are fixed overlays; measure their heights and
-  // reserve matching bands on the root so no message ever hides behind them.
+  // Measure actual composer wrapper dimensions so the purple doodle border scales seamlessly
   useEffect(() => {
-    const el = screenRef.current;
+    const el = wrapperRef.current;
     if (!el) return;
-    const apply = () => {
-      el.style.setProperty("--hdr-h", `${headerRef.current?.offsetHeight ?? 0}px`);
-      el.style.setProperty("--cmp-h", `${composerRef.current?.offsetHeight ?? 0}px`);
-      if (isNearBottomRef.current) {
-        window.scrollTo(0, document.documentElement.scrollHeight);
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          setWrapperSize({ width: Math.round(width), height: Math.round(height) });
+        }
       }
-    };
-    apply();
-    const ro = new ResizeObserver(apply);
-    if (headerRef.current) ro.observe(headerRef.current);
-    if (composerRef.current) ro.observe(composerRef.current);
+    });
+    ro.observe(el);
     return () => ro.disconnect();
   }, []);
 
-  // 2. Near-bottom tracking on the page scroll
+  // When composer height changes, keep messages anchored if already near bottom
   useEffect(() => {
-    const onScroll = () => {
-      const doc = document.documentElement;
-      isNearBottomRef.current = doc.scrollHeight - window.scrollY - window.innerHeight <= 140;
-    };
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
+    const composer = composerRef.current;
+    if (!composer) return;
+    const ro = new ResizeObserver(() => {
+      if (isNearBottomRef.current && listRef.current) {
+        listRef.current.scrollTop = listRef.current.scrollHeight;
+      }
+    });
+    ro.observe(composer);
+    return () => ro.disconnect();
   }, []);
 
-  // 3. Keep newest messages in view when message count increases (only if already near bottom)
+  // Near-bottom tracking on the independent message scroller
+  const handleScroll = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const threshold = 120;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    isNearBottomRef.current = distanceFromBottom <= threshold;
+  }, []);
+
+  // Visual Viewport synchronization:
+  // Pins ChatRoot top to vv.offsetTop (so header stays STICKED at top of visible screen)
+  // and height to vv.height (so composer stays glued directly above keyboard).
   useEffect(() => {
-    if (isNearBottomRef.current) scrollToEnd();
+    const el = screenRef.current;
+    if (!el) return;
+
+    let rafId = 0;
+    const syncViewport = () => {
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        const vv = window.visualViewport;
+        if (!vv) {
+          el.style.height = "100dvh";
+          el.style.top = "0px";
+          return;
+        }
+
+        // Prevent iOS window panning from scrolling the document
+        if (window.scrollY !== 0) {
+          window.scrollTo(0, 0);
+        }
+
+        el.style.height = `${vv.height}px`;
+        el.style.top = `${vv.offsetTop}px`;
+
+        if (isNearBottomRef.current && listRef.current) {
+          listRef.current.scrollTop = listRef.current.scrollHeight;
+        }
+      });
+    };
+
+    syncViewport();
+
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", syncViewport);
+    vv?.addEventListener("scroll", syncViewport);
+    window.addEventListener("resize", syncViewport);
+    window.addEventListener("scroll", syncViewport, { passive: true });
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      vv?.removeEventListener("resize", syncViewport);
+      vv?.removeEventListener("scroll", syncViewport);
+      window.removeEventListener("resize", syncViewport);
+      window.removeEventListener("scroll", syncViewport);
+    };
+  }, []);
+
+  // Keep newest messages in view when message count increases (only if already near bottom)
+  useEffect(() => {
+    if (isNearBottomRef.current) scrollToEnd(false);
   }, [detail?.messages.length, scrollToEnd]);
 
-  // 4. Initial scroll to bottom when messages first load
+  // Initial scroll to bottom when messages first load
   useEffect(() => {
     if (detail?.messages && detail.messages.length > 0 && !initialScrollDone.current) {
-      scrollToEnd();
+      scrollToEnd(false);
       initialScrollDone.current = true;
     }
   }, [detail?.messages, scrollToEnd]);
@@ -852,7 +960,7 @@ export default function ChatPage() {
     // 5. Scroll to bottom
     isNearBottomRef.current = true;
     requestAnimationFrame(() => {
-      window.scrollTo(0, document.documentElement.scrollHeight);
+      scrollToEnd(false);
     });
 
     try {
@@ -957,9 +1065,12 @@ export default function ChatPage() {
 
     const t = text;
     setText("");
+    setFontSize(16);
 
-    // CRITICAL: keep the textarea focused so iOS NEVER dismisses the software keyboard
+    // CRITICAL: reset dimensions immediately and keep textarea focused so iOS never dismisses the keyboard
     if (textareaRef.current) {
+      textareaRef.current.style.height = "42px";
+      textareaRef.current.style.overflowY = "hidden";
       textareaRef.current.focus({ preventScroll: true });
     }
 
@@ -1030,19 +1141,16 @@ export default function ChatPage() {
     <>
       <div
         ref={screenRef}
-        className="chat-screen font-display relative z-[65] bg-[#0b0b0b] text-white flex flex-col"
+        className="chat-screen font-display fixed inset-x-0 z-[65] bg-[#0b0b0b] text-white flex flex-col overflow-hidden max-w-2xl mx-auto"
         style={{
-          minHeight: "100dvh",
-          width: "100vw",
-          margin: "-8px calc(50% - 50vw) -128px",
-          paddingTop: "var(--hdr-h, 108px)",
-          paddingBottom: "var(--cmp-h, 96px)",
+          top: "0px",
+          height: "100dvh",
         }}
       >
         {clickShield && <div className="absolute inset-0 z-[80]" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} />}
 
-      {/* header — FIXED permanently to the top of the chat viewport */}
-      <div ref={headerRef} className="fixed top-0 left-0 right-0 z-40 bg-[#0b0b0b]">
+      {/* header — PERMANENTLY STICKED at top of chat flex column */}
+      <div ref={headerRef} className="shrink-0 z-40 bg-[#0b0b0b]">
         <header className="relative z-10 flex shrink-0 items-center gap-2.5 px-4 pt-[max(12px,env(safe-area-inset-top))] pb-2">
         <button onClick={() => router.push("/messages")} aria-label="Back to Messages" className="shrink-0 text-white transition-transform active:scale-90">
           <Icon name="arrow-left" size={21} strokeWidth={2.4} />
@@ -1073,10 +1181,16 @@ export default function ChatPage() {
         <HeaderRule />
       </div>
 
-      {/* messages */}
+      {/* messages — INDEPENDENT scrollable message scroller */}
       <div
         ref={listRef}
-        className="relative z-10 flex flex-1 flex-col px-4 pb-2 pt-1"
+        onScroll={handleScroll}
+        className="relative z-10 flex-1 min-h-0 overflow-y-auto no-scrollbar px-4 pb-3 flex flex-col"
+        style={{
+          overscrollBehavior: "contain",
+          WebkitOverflowScrolling: "touch",
+          touchAction: "pan-y",
+        }}
       >
         {/* mt-auto hugs the composer when the thread is short, scrolls normally when it grows */}
         <div className="mt-auto flex flex-col space-y-3">
@@ -1169,7 +1283,7 @@ export default function ChatPage() {
                     return (
                       <div key={m.id} id={`chat-msg-${m.id}`} className={`flex max-w-[92%] flex-col ${b.run.mine ? "self-end items-end" : "self-start items-start"} ${flashId === m.id ? "msg-flash" : ""} ${bubbleAnim}`}>
                         <div
-                          className={`msg-press relative min-w-[92px] ${selected}`}
+                          className={`msg-press relative min-w-[92px] max-w-full ${selected}`}
                           {...gestures}
                           style={swipeStyle(m)}
                         >
@@ -1183,7 +1297,7 @@ export default function ChatPage() {
                               <Spark size={28} color="#C8FF3D" />
                             </span>
                           )}
-                          <div className="relative px-3.5 py-2">
+                          <div className="relative max-w-full min-w-0 px-3.5 py-2">
                             {m.reply_to && (
                               <button
                                 onClick={(e) => { e.stopPropagation(); jumpToMessage(m.reply_to!.id); }}
@@ -1213,7 +1327,16 @@ export default function ChatPage() {
                               <video src={m.media_url} controls className="mb-1 max-w-[190px] rounded-lg" preload="metadata" />
                             )}
                             {m.content && (
-                              <p className={`whitespace-pre-wrap break-words text-[16px] leading-snug ${b.run.mine ? "text-[#0a0a0a]" : "text-white/95"}`}>{m.content}</p>
+                              <p
+                                className={`whitespace-pre-wrap text-[16px] leading-snug ${b.run.mine ? "text-[#0a0a0a]" : "text-white/95"}`}
+                                style={{
+                                  overflowWrap: "anywhere",
+                                  wordBreak: "break-word",
+                                  maxWidth: "100%",
+                                }}
+                              >
+                                {m.content}
+                              </p>
                             )}
                             <div className={`mt-0.5 flex items-center justify-end gap-1 whitespace-nowrap text-[10px] leading-none ${b.run.mine ? "text-[#0a0a0a]/60" : "text-white/45"}`}>
                               {timeShort(m.created_at)}
@@ -1254,14 +1377,14 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* composer — FIXED to the bottom of the screen */}
+      {/* composer — shrink-0 at bottom of chat flex column */}
       <div
         ref={composerRef}
-        className="fixed bottom-0 left-0 right-0 z-20 bg-[#0b0b0b] px-3.5 pt-2"
+        className="relative z-30 shrink-0 bg-[#0b0b0b] px-3.5 pt-2"
         style={{
           paddingBottom: kbFocused
-            ? "6px"
-            : "max(12px, calc(env(safe-area-inset-bottom, 0px) - 10px))",
+            ? "8px"
+            : "max(12px, calc(env(safe-area-inset-bottom, 0px) - 6px))",
         }}
       >
         {attach && (
@@ -1298,27 +1421,29 @@ export default function ChatPage() {
             <WobblyCircle fill="#101010" stroke="#7C4DFF" />
             <span className="relative"><Icon name="plus" size={19} strokeWidth={2.6} /></span>
           </button>
-          <div className="relative flex min-h-[42px] min-w-0 flex-1 items-center">
-            <svg viewBox="0 0 100 30" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
-              <path
-                d="M8 4.5 C 30 2.5, 70 2.6, 92 4.5 C 96.8 6, 98.4 9.5, 98 15 C 98.4 20.5, 96.6 24, 92 25.5 C 70 27.4, 30 27.5, 8 25.5 C 3.4 24, 1.6 20.5, 2 15 C 1.6 9.5, 3.2 6, 8 4.5 Z"
-                fill="#101010" stroke="rgba(124,77,255,0.9)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke"
-              />
-            </svg>
+          <div
+            ref={wrapperRef}
+            className="relative flex min-h-[42px] min-w-0 flex-1 rounded-[20px] bg-[#101010]"
+            style={{ boxSizing: "border-box" }}
+          >
+            <ComposerDoodleBorder width={wrapperSize.width} height={wrapperSize.height} />
             <textarea
               ref={textareaRef}
               rows={1}
-              className="relative z-10 min-w-0 flex-1 resize-none bg-transparent px-3.5 py-[9px] text-white outline-none placeholder:text-white/35 leading-[1.35] no-scrollbar"
+              className="relative z-10 w-full min-w-0 resize-none bg-transparent px-3.5 py-[9px] text-white outline-none placeholder:text-white/35 leading-[1.35] no-scrollbar"
               style={{
+                boxSizing: "border-box",
                 height: "42px",
                 minHeight: "42px",
                 maxHeight: "128px",
                 fontSize: `${fontSize}px`,
                 transition: "font-size 0.12s ease-out",
+                overflowWrap: "anywhere",
+                wordBreak: "break-word",
               }}
               placeholder="say something..."
               value={text}
-              maxLength={280}
+              maxLength={10000}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
@@ -1327,9 +1452,6 @@ export default function ChatPage() {
                 }
               }}
               onFocus={(e) => {
-                // iOS scrolls the page itself to reveal the input — let it.
-                // Only bookkeeping here: tighter padding while typing, and no
-                // programmatic scrollIntoView for iOS to fight.
                 setKbFocused(true);
                 e.target.scrollIntoView = () => {};
               }}

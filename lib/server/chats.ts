@@ -464,12 +464,12 @@ export async function sendMessage(user: Profile, conversationId: string, input: 
     if (!input.media_url) return { error: "Missing media." };
     message = {
       id: uid(), conversation_id: c.id, sender_id: canonUserId, type: input.type,
-      content: (input.content ?? "").slice(0, 280), post_id: null, media_url: input.media_url,
+      content: (input.content ?? "").slice(0, 10000), post_id: null, media_url: input.media_url,
       sticker_id: null, reply_to_message_id: replyTo,
       created_at: new Date().toISOString(), expires_at: expiresAt,
     };
   } else {
-    const content = (input.content ?? "").trim().slice(0, 280);
+    const content = (input.content ?? "").trim().slice(0, 10000);
     if (!content) return { error: "Say something (anything)." };
     message = {
       id: uid(), conversation_id: c.id, sender_id: canonUserId, type: "text",

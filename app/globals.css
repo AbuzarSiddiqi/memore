@@ -86,12 +86,20 @@
   -webkit-touch-callout: default !important;
 }
 
-/* MEMORE Chat Window */
+/* MEMORE Chat Window — flex column container mapped to visual viewport */
 .chat-screen {
-  position: relative;
+  position: fixed;
+  left: 0;
+  right: 0;
   display: flex;
   flex-direction: column;
-  overscroll-behavior-y: none;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body:has(.chat-screen) {
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
 }
 
 /* Chat Screen Frame: lives INSIDE the chat root (absolute), so it follows the
