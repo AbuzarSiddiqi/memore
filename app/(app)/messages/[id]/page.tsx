@@ -405,7 +405,10 @@ export default function ChatPage() {
   // change with the safe-area, the reply bar and the temp label) and reserve
   // matching bands on the root so no message ever hides behind them.
   const scrollToEnd = useCallback(() => {
-    window.scrollTo(0, document.documentElement.scrollHeight);
+    const el = listRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, []);
 
   // Dynamic font sizing with hysteresis:
@@ -474,23 +477,18 @@ export default function ChatPage() {
     return () => window.removeEventListener("resize", adjustTextareaHeight);
   }, [adjustTextareaHeight]);
 
-  // 1. The chat is a NORMAL scrolling page — the same architecture as every
-  // website that works on an iPhone: a sticky header, messages in the page
-  // flow, a sticky composer, and iOS's own keyboard handling. The page scrolls
-  // when the keyboard opens (exactly like a plain website), the header and
-  // composer stick to the viewport, and no code fights the OS — the source of
-  // every previous failure is simply gone. Only scroll bookkeeping remains.
-  // The header and composer are fixed overlays; measure their heights (they
-  // change with the safe-area, the reply bar and the auto-growing input) and reserve
-  // matching bands on the root so no message ever hides behind them.
+  // 1. Fixed Header measurement: measures the actual header height into --hdr-h
+  // so the independent message list reserves the exact space underneath it.
   useEffect(() => {
     const el = screenRef.current;
     if (!el) return;
     const apply = () => {
-      el.style.setProperty("--hdr-h", `${headerRef.current?.offsetHeight ?? 0}px`);
-      el.style.setProperty("--cmp-h", `${composerRef.current?.offsetHeight ?? 0}px`);
-      if (isNearBottomRef.current) {
-        window.scrollTo(0, document.documentElement.scrollHeight);
+      const h = headerRef.current?.offsetHeight ?? 0;
+      if (h > 0) {
+        el.style.setProperty("--hdr-h", `${h}px`);
+      }
+      if (isNearBottomRef.current && listRef.current) {
+        listRef.current.scrollTop = listRef.current.scrollHeight;
       }
     };
     apply();
@@ -500,14 +498,48 @@ export default function ChatPage() {
     return () => ro.disconnect();
   }, []);
 
-  // 2. Near-bottom tracking on the page scroll
+  // 2. Near-bottom tracking on the independent message scroller
+  const handleScroll = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const threshold = 140;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    isNearBottomRef.current = distanceFromBottom <= threshold;
+  }, []);
+
+  // 3. Visual Viewport synchronization: keeps chat bottom glued directly above
+  // the on-screen keyboard on iPhone with zero gap and without moving the header.
   useEffect(() => {
-    const onScroll = () => {
-      const doc = document.documentElement;
-      isNearBottomRef.current = doc.scrollHeight - window.scrollY - window.innerHeight <= 140;
+    const el = screenRef.current;
+    if (!el) return;
+
+    let rafId = 0;
+    const syncViewport = () => {
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        const vv = window.visualViewport;
+        if (!vv) {
+          el.style.setProperty("--chat-bottom", "0px");
+          return;
+        }
+        const overlap = Math.max(0, window.innerHeight - vv.height);
+        el.style.setProperty("--chat-bottom", `${overlap}px`);
+        if (isNearBottomRef.current && listRef.current) {
+          listRef.current.scrollTop = listRef.current.scrollHeight;
+        }
+      });
     };
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
+
+    syncViewport();
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", syncViewport);
+    window.addEventListener("resize", syncViewport);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      vv?.removeEventListener("resize", syncViewport);
+      window.removeEventListener("resize", syncViewport);
+    };
   }, []);
 
   // 3. Keep newest messages in view when message count increases (only if already near bottom)
@@ -939,24 +971,45 @@ export default function ChatPage() {
   };
 
 
-  // tap a reply quote → jump to the message it answers
+  // tap a reply quote → jump to the message it answers inside the independent message scroller
   const [flashId, setFlashId] = useState<string | null>(null);
   const jumpToMessage = (msgId: string) => {
     const el = document.getElementById(`chat-msg-${msgId}`);
-    if (!el) return;
-    const top = el.getBoundingClientRect().top + window.scrollY - (window.innerHeight / 2) + (el.getBoundingClientRect().height / 2);
-    window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    const list = listRef.current;
+    if (!el || !list) return;
+    const listRect = list.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const offset = elRect.top - listRect.top + list.scrollTop - (listRect.height / 2) + (elRect.height / 2);
+    list.scrollTo({ top: Math.max(0, offset), behavior: "smooth" });
     setFlashId(msgId);
     try { navigator.vibrate?.(8); } catch { /* no haptics */ }
     window.setTimeout(() => setFlashId((f) => (f === msgId ? null : f)), 1600);
   };
 
-  const sendText = async () => {
+  const sendingLockRef = useRef(false);
+  const sendText = useCallback(async () => {
+    if (sendingLockRef.current) return;
     if (!text.trim() || busy) return;
+
+    sendingLockRef.current = true;
+    setTimeout(() => { sendingLockRef.current = false; }, 300);
+
     const t = text;
     setText("");
-    await send({ type: "text", content: t });
-  };
+
+    // CRITICAL: keep the textarea focused so iOS NEVER dismisses the software keyboard
+    if (textareaRef.current) {
+      textareaRef.current.focus({ preventScroll: true });
+    }
+
+    try {
+      await send({ type: "text", content: t });
+    } finally {
+      if (textareaRef.current && document.activeElement !== textareaRef.current) {
+        textareaRef.current.focus({ preventScroll: true });
+      }
+    }
+  }, [text, busy, send]);
 
   const onFile = async (file: File | undefined) => {
     if (!file) return;
@@ -1016,27 +1069,15 @@ export default function ChatPage() {
     <>
       <div
         ref={screenRef}
-        className="chat-screen font-display relative z-[65] bg-[#0b0b0b] text-white flex flex-col"
+        className="chat-screen font-display fixed inset-0 z-[65] bg-[#0b0b0b] text-white flex flex-col overflow-hidden max-w-2xl mx-auto"
         style={{
-          minHeight: "100dvh",
-          // full-bleed at every screen size: escape the app shell's px-4 /
-          // centered-column paddings so the chat spans the entire screen width
-          width: "100vw",
-          // top/bottom neutralise <main>'s paddings; the sides are the
-          // full-bleed trick (50% - 50vw centres a viewport-wide box in any
-          // padded/centered ancestor)
-          margin: "-8px calc(50% - 50vw) -128px",
-          // reserve the bands the fixed header/composer overlay
-          paddingTop: "var(--hdr-h, 108px)",
-          paddingBottom: "var(--cmp-h, 96px)",
+          bottom: "var(--chat-bottom, 0px)",
         }}
       >
         {clickShield && <div className="absolute inset-0 z-[80]" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} />}
 
-      {/* header — FIXED to the top of the screen: it physically cannot move
-          while the messages scroll, exactly like Instagram's chat. Its height
-          is measured into --hdr-h so the messages flow underneath it. */}
-      <div ref={headerRef} className="fixed top-0 left-0 right-0 z-40 bg-[#0b0b0b]">
+      {/* header — FIXED permanently at the top of the chat viewport */}
+      <div ref={headerRef} className="fixed top-0 left-0 right-0 z-40 bg-[#0b0b0b] max-w-2xl mx-auto">
         <header className="relative z-10 flex shrink-0 items-center gap-2.5 px-4 pt-[max(12px,env(safe-area-inset-top))] pb-2">
         <button onClick={() => router.push("/messages")} aria-label="Back to Messages" className="shrink-0 text-white transition-transform active:scale-90">
           <Icon name="arrow-left" size={21} strokeWidth={2.4} />
@@ -1067,10 +1108,17 @@ export default function ChatPage() {
         <HeaderRule />
       </div>
 
-      {/* messages — plain page flow; the page itself is the scroller */}
+      {/* messages — INDEPENDENTLY scrollable message list */}
       <div
         ref={listRef}
-        className="relative z-10 flex flex-1 flex-col px-4 pb-2 pt-1"
+        onScroll={handleScroll}
+        className="relative z-10 flex-1 min-h-0 overflow-y-auto no-scrollbar px-4 pb-2 flex flex-col"
+        style={{
+          paddingTop: "var(--hdr-h, 78px)",
+          overscrollBehavior: "contain",
+          WebkitOverflowScrolling: "touch",
+          touchAction: "pan-y",
+        }}
       >
         {/* mt-auto hugs the composer when the thread is short, scrolls normally when it grows */}
         <div className="mt-auto flex flex-col space-y-3">
@@ -1249,12 +1297,10 @@ export default function ChatPage() {
       </div>
 
       {/* composer — FIXED to the bottom of the screen like the header: it
-          cannot move while messages scroll; its measured height reserves the
-          bottom band via --cmp-h. When the native keyboard opens, iOS nudges
-          the page behind it, exactly like a plain website. */}
+      {/* composer — bottom section of the chat flex column */}
       <div
         ref={composerRef}
-        className="fixed bottom-0 left-0 right-0 z-20 bg-[#0b0b0b] px-3.5 pt-2"
+        className="relative z-30 shrink-0 bg-[#0b0b0b] px-3.5 pt-2"
         style={{
           paddingBottom: kbFocused
             ? "6px"
@@ -1349,7 +1395,21 @@ export default function ChatPage() {
               <span className="absolute left-1/2 top-[47%] -translate-x-1/2 -translate-y-1/2"><Spark size={7} color="#C8FF3D" /></span>
             </span>
           </button>
-          <button onClick={() => sendText()} aria-label="Send message" className="relative flex h-[42px] w-[42px] shrink-0 items-center justify-center text-[#0a0a0a] transition-transform active:scale-90">
+          <button
+            type="button"
+            aria-label="Send message"
+            className="relative flex h-[42px] w-[42px] shrink-0 items-center justify-center text-[#0a0a0a] transition-transform active:scale-90"
+            onPointerDown={(e) => {
+              // CRITICAL: preventDefault prevents iOS from blurring the textarea!
+              // Keyboard stays open and message sends immediately on first tap.
+              e.preventDefault();
+              sendText();
+            }}
+            onClick={(e) => {
+              e.preventDefault();
+              sendText();
+            }}
+          >
             <WobblyCircle fill="#C8FF3D" stroke="rgba(10,10,10,0.7)" />
             <span className="relative"><Icon name="arrow-right" size={20} strokeWidth={2.6} /></span>
           </button>

@@ -86,16 +86,23 @@
   -webkit-touch-callout: default !important;
 }
 
-/* MEMORE Chat Window — a NORMAL scrolling page, the same architecture as any
-   website that works on an iPhone: sticky header, messages in the page flow,
-   sticky composer. iOS scrolls the page itself when the keyboard opens and
-   restores it on close — native behaviour, nothing to fight, nothing to
-   break. No fixed positioning, no viewport JS, no transforms. */
+/* MEMORE Chat Window — fixed container with fixed header, independently
+   scrollable message list, and dynamic bottom composer aligned above keyboard. */
 .chat-screen {
-  position: relative;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: var(--chat-bottom, 0px);
   display: flex;
   flex-direction: column;
-  overscroll-behavior-y: none;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body:has(.chat-screen) {
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
 }
 
 /* Chat Screen Frame: lives INSIDE the chat root (absolute), so it follows the
