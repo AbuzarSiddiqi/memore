@@ -18,10 +18,20 @@ import { ReactionStamps, ReactionTray, armClickGuard } from "@/components/reacti
 import { StickerArt, StickerSheet, recordStickerRecent } from "@/components/stickers";
 import { ShareSheet } from "@/components/share";
 import { Icon, type IconName } from "@/components/icons";
+import { ChatKeyboard } from "@/components/chat-keyboard";
 import { Spark } from "@/components/brand";
 
 const TRAY_KEY = "memore-chat-reactions";
 const REPLY_THRESHOLD = 64; // px of pull before a swipe becomes a reply
+
+// iPhone gets the in-app ChatKeyboard: iOS 26's native keyboard shoves the
+// page around and reports garbage viewport sizes inside a full-screen PWA, so
+// on iOS the composer input is read-only and the custom keyboard types into
+// it. Android/desktop keep the native input.
+const IS_IOS =
+  typeof navigator !== "undefined" &&
+  (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
 
 /** Short quote line for a reply reference (message or post). */
 function quoteText(q: { type: ChatMessageView["type"]; content: string; sticker_id?: string | null; post?: { caption: string } | null }): string {
@@ -218,6 +228,8 @@ export default function ChatPage() {
   const [gone, setGone] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [kbOpen, setKbOpen] = useState(false); // iPhone's in-app keyboard
+  const userTouchRef = useRef(false); // true while the user's finger scrolls the message list
   const [menu, setMenu] = useState(false);
   const [sharePost, setSharePost] = useState(false);
   const [investMeme, setInvestMeme] = useState<MemeView | null>(null);
@@ -523,7 +535,18 @@ export default function ChatPage() {
     const threshold = 140;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     isNearBottomRef.current = distanceFromBottom <= threshold;
+    // A finger on the message list dismisses the in-app keyboard (programmatic
+    // pin-scrolls don't — they never set userTouchRef).
+    if (userTouchRef.current) setKbOpen(false);
   }, []);
+
+  // When the in-app keyboard appears, the message list shrinks around it —
+  // keep the newest message pinned if the user was already at the bottom.
+  useEffect(() => {
+    if (kbOpen && isNearBottomRef.current && listRef.current) {
+      listRef.current.scrollTop = listRef.current.scrollHeight;
+    }
+  }, [kbOpen]);
 
   // 4. Keep newest messages in view when message count increases (only if already near bottom)
   useEffect(() => {
@@ -1094,6 +1117,9 @@ export default function ChatPage() {
       <div
         ref={listRef}
         onScroll={handleScroll}
+        onTouchStart={() => { userTouchRef.current = true; }}
+        onTouchEnd={() => { setTimeout(() => { userTouchRef.current = false; }, 250); }}
+        onTouchCancel={() => { setTimeout(() => { userTouchRef.current = false; }, 250); }}
         className="relative z-10 flex min-h-0 flex-1 flex-col overflow-y-auto no-scrollbar px-4 pb-2 pt-1"
         style={{
           overscrollBehavior: "contain",
@@ -1300,7 +1326,7 @@ export default function ChatPage() {
           </div>
         )}
         <div className="flex items-center gap-2.5">
-          <button onClick={() => setAttach((a) => !a)} aria-label="Attach" className="relative flex h-[42px] w-[42px] shrink-0 items-center justify-center text-white/90 transition-transform active:scale-90">
+          <button onClick={() => { setKbOpen(false); setAttach((a) => !a); }} aria-label="Attach" className="relative flex h-[42px] w-[42px] shrink-0 items-center justify-center text-white/90 transition-transform active:scale-90">
             <WobblyCircle fill="#101010" stroke="#7C4DFF" />
             <span className="relative"><Icon name="plus" size={19} strokeWidth={2.6} /></span>
           </button>
@@ -1316,20 +1342,23 @@ export default function ChatPage() {
               placeholder="say something..."
               value={text}
               maxLength={280}
+              readOnly={IS_IOS}
+              inputMode={IS_IOS ? "none" : undefined}
+              onClick={() => { if (IS_IOS) setKbOpen(true); }}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") sendText(); }}
               aria-label="Message"
-              enterKeyHint="send"
+              enterKeyHint={IS_IOS ? undefined : "send"}
               onFocus={(e) => {
                 // Prevent iOS from scrolling/panning the page to center this
-                // input — the root already tracks the visual viewport in
-                // syncViewport, so the composer is always above the keyboard.
+                // input. On iPhone the input is read-only (custom keyboard
+                // types into it), so the native keyboard never opens at all.
                 e.target.scrollIntoView = () => {};
               }}
             />
           </div>
           <button
-            onClick={() => { (document.activeElement as HTMLElement | null)?.blur?.(); setStickersOpen(true); }}
+            onClick={() => { (document.activeElement as HTMLElement | null)?.blur?.(); setKbOpen(false); setStickersOpen(true); }}
             aria-label="Stickers"
             className="relative flex h-[38px] w-[38px] shrink-0 items-center justify-center text-white/90 transition-transform active:scale-90"
           >
@@ -1348,6 +1377,17 @@ export default function ChatPage() {
           </button>
         </div>
       </div>
+
+      {/* in-app keyboard — iPhone only; the native keyboard never opens here */}
+      {IS_IOS && kbOpen && (
+        <ChatKeyboard
+          value={text}
+          onInsert={(ch) => setText((t) => (t + ch).slice(0, 280))}
+          onBackspace={() => setText((t) => t.slice(0, -1))}
+          onSend={() => sendText()}
+          onClose={() => setKbOpen(false)}
+        />
+      )}
 
       {reactTo && (
         <>
