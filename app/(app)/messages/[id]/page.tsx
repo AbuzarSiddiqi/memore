@@ -334,10 +334,18 @@ export default function ChatPage() {
   useEffect(() => {
     alive.current = true;
     load();
-    const t = setInterval(load, 3000);
+    const t = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      load();
+    }, 5000);
+    const onVisible = () => {
+      if (typeof document !== "undefined" && !document.hidden) load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       alive.current = false;
       clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [load]);
 

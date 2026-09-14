@@ -118,7 +118,7 @@ export function triggerBackgroundCloudSync(): Promise<void> {
 export async function ensureHydrated(force = false): Promise<DB> {
   const current = db();
   const now = Date.now();
-  if (!force && lastCloudSyncAt > 0 && now - lastCloudSyncAt < 8000) {
+  if (!force && lastCloudSyncAt > 0 && now - lastCloudSyncAt < 60_000) {
     return current;
   }
 
@@ -131,7 +131,6 @@ export async function ensureHydrated(force = false): Promise<DB> {
           if (cloudDb && state) {
             mergeCloudDbIntoState(state, cloudDb);
             lastCloudSyncAt = Date.now();
-            save();
           }
         } catch (err) {
           console.warn("Background cloud sync warning:", err);
@@ -155,7 +154,6 @@ export async function ensureHydrated(force = false): Promise<DB> {
       if (cloudDb && state) {
         mergeCloudDbIntoState(state, cloudDb);
         lastCloudSyncAt = Date.now();
-        save();
       }
     } catch (err) {
       console.warn("ensureHydrated cloud sync warning:", err);

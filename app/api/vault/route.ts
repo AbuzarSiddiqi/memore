@@ -39,9 +39,18 @@ export async function GET() {
   const best = sells.reduce((b, t) => ((t.realized_pnl ?? 0) > (b?.realized_pnl ?? -Infinity) ? t : b), sells[0]);
   const worst = sells.reduce((w, t) => ((t.realized_pnl ?? 0) < (w?.realized_pnl ?? Infinity) ? t : w), sells[0]);
 
+  const memeCache = new Map<string, ReturnType<typeof memeView> | null>();
+  const getMemeView = (mId: string) => {
+    if (!memeCache.has(mId)) {
+      const m = d.memes.find((x) => x.id === mId);
+      memeCache.set(mId, m ? memeView(m, user.id) : null);
+    }
+    return memeCache.get(mId);
+  };
+
   const view = (t: typeof myTxs[number]) => ({
     ...t,
-    meme: memeView(d.memes.find((m) => m.id === t.meme_id)!, user.id),
+    meme: getMemeView(t.meme_id),
   });
 
   return ok({

@@ -3,7 +3,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { PublicUser } from "./types";
 import { playSfx } from "./sfx";
-import { dedupRequest, getMemoryCache, setMemoryCache, purgeUserPrivateCache } from "./client-cache";
+import { dedupRequest, getMemoryCache, getMemoryCacheAge, setMemoryCache, purgeUserPrivateCache } from "./client-cache";
 
 // ---------- api ----------
 export const UNAUTHORIZED_EVENT = "aura:unauthorized";
@@ -60,10 +60,15 @@ export function useApi<T>(url: string | null, deps: unknown[] = []) {
     let alive = true;
     // Check if memory has a fresh copy
     const cached = getMemoryCache<T>(url);
+    const age = getMemoryCacheAge(url);
     if (cached) {
       setData(cached);
       hasData.current = true;
       setLoading(false);
+      // Skip redundant network fetch if data is fresh (< 4s old) and refresh wasn't explicitly clicked
+      if (tick === 0 && age !== null && age < 4000) {
+        return;
+      }
     } else if (!hasData.current) {
       setLoading(true);
     }

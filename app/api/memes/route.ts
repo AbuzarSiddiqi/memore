@@ -7,7 +7,7 @@ import { eventAndSeason } from "@/lib/server/feed";
 import { pushNotification, checkAchievements } from "@/lib/server/notify";
 import { trackMission } from "@/lib/server/progression";
 import { priceFromNet } from "@/lib/server/market";
-import { shouldAttemptTextTableSync, noteTextTableSyncResult } from "@/lib/server/sync";
+import { shouldAttemptTextTableSync, noteTextTableSyncResult, invalidateSnapshotTextCache } from "@/lib/server/sync";
 import { TEXT_POST_LIMIT, TEXT_POST_MIN } from "@/lib/limits";
 import { oneLine, parseHashtags } from "@/lib/text";
 import type { Meme } from "@/lib/types";
@@ -113,14 +113,13 @@ export async function POST(req: NextRequest) {
     // instead of waiting out the 400ms save debounce
     if (meme.media_type === "text") persistNow();
 
-    // Sync directly to Supabase. Text memes only sync to the table when its
-    // schema allows them (see database/migration_v3_text_posts.sql); otherwise
-    // they persist through the local store + Supabase Storage snapshot via save().
+    // Sync directly to Supabase. Text memes sync directly to the table (with
+    // automatic fallback if the table schema has not been migrated yet) and persist
+    // through the local store + Supabase Storage snapshot.
     try {
-      const skipTable = meme.media_type === "text" && !shouldAttemptTextTableSync();
       const { createAdminClient } = await import("@/lib/supabase/admin");
       const admin = createAdminClient();
-      if (admin && !skipTable) {
+      if (admin) {
         let creatorUuid = user.id;
         const { data: prof } = await admin.from("profiles").select("id").eq("email", user.email).maybeSingle();
         if (prof?.id) {
@@ -147,7 +146,8 @@ export async function POST(req: NextRequest) {
           }, { onConflict: "id" });
         }
 
-        const upsert = await admin.from("memes").upsert({
+        const isText = meme.media_type === "text";
+        const memePayload = {
           id: meme.id,
           creator_id: creatorUuid,
           caption: meme.caption,
@@ -155,15 +155,27 @@ export async function POST(req: NextRequest) {
           category: meme.category,
           tags: meme.tags,
           media_type: meme.media_type,
-          media_url: meme.media_url,
-          thumbnail_url: meme.thumbnail_url,
+          media_url: meme.media_url || (isText ? "text://" : ""),
+          thumbnail_url: meme.thumbnail_url || (isText ? "text://" : ""),
           width: meme.width,
           height: meme.height,
           duration: meme.duration,
           initial_price: meme.initial_price,
           current_price: meme.current_price,
+          net_invested: meme.net_invested,
+          total_invested: meme.total_invested,
+          total_sell_value: meme.total_sell_value,
+          open_price_24h: meme.open_price_24h,
+          all_time_high: meme.all_time_high,
+          volume_24h: meme.volume_24h,
+          momentum: meme.momentum,
+          views: meme.views,
+          saves: meme.saves,
+          remix_count: meme.remix_count,
+          battle_wins: meme.battle_wins,
+          battle_losses: meme.battle_losses,
           status: meme.status,
-          source: meme.source,
+          source: meme.source || (isText ? "text" : "original"),
           dna_humor: meme.dna.humor,
           dna_chaos: meme.dna.chaos,
           dna_relatability: meme.dna.relatability,
@@ -172,9 +184,22 @@ export async function POST(req: NextRequest) {
           dna_absurdity: meme.dna.absurdity,
           created_at: meme.created_at,
           updated_at: meme.updated_at,
-        }, { onConflict: "id" }).select("id").maybeSingle();
-        if (upsert.error && meme.media_type === "text") noteTextTableSyncResult(upsert.error);
+        };
 
+        const upsert = await admin.from("memes").upsert(memePayload, { onConflict: "id" }).select("id").maybeSingle();
+        if (upsert.error && isText) {
+          noteTextTableSyncResult(upsert.error);
+          // Fallback when Supabase memes table constraint check (media_type IN ('image', 'video')) has not been migrated
+          await admin.from("memes").upsert({
+            ...memePayload,
+            media_type: "image",
+            source: "text",
+            media_url: "text://",
+            thumbnail_url: "text://",
+          }, { onConflict: "id" });
+        }
+
+        invalidateSnapshotTextCache();
         // Ensure in-memory state and cloud state are immediately synchronized
         await ensureHydrated(true);
       }

@@ -121,57 +121,67 @@ export async function syncTransactionToSupabase(tx: Transaction): Promise<void> 
 export async function syncMemeToSupabase(meme: Meme): Promise<void> {
   const admin = createAdminClient();
   if (!admin) return;
-  // Until the table allows text posts, they ride the Storage snapshot only.
-  if (meme.media_type === "text" && !shouldAttemptTextTableSync()) return;
 
   const canonCreatorId = toCanonicalUuid(meme.creator_id);
+  const basePayload = {
+    id: meme.id,
+    creator_id: canonCreatorId,
+    caption: meme.caption,
+    description: meme.description || "",
+    category: meme.category,
+    tags: meme.tags,
+    media_type: meme.media_type,
+    media_url: meme.media_url || (meme.media_type === "text" ? "text://" : ""),
+    thumbnail_url: meme.thumbnail_url || (meme.media_type === "text" ? "text://" : ""),
+    width: meme.width,
+    height: meme.height,
+    duration: meme.duration,
+    initial_price: meme.initial_price,
+    current_price: meme.current_price,
+    net_invested: meme.net_invested,
+    total_invested: meme.total_invested,
+    total_sell_value: meme.total_sell_value,
+    open_price_24h: meme.open_price_24h,
+    all_time_high: meme.all_time_high,
+    volume_24h: meme.volume_24h,
+    momentum: meme.momentum,
+    views: meme.views,
+    saves: meme.saves,
+    remix_count: meme.remix_count,
+    battle_wins: meme.battle_wins,
+    battle_losses: meme.battle_losses,
+    status: meme.status,
+    parent_meme_id: meme.parent_meme_id,
+    epitaph: meme.epitaph,
+    source: meme.source || (meme.media_type === "text" ? "text" : "original"),
+    source_url: meme.source_url,
+    source_handle: meme.source_handle,
+    dna_humor: meme.dna.humor,
+    dna_chaos: meme.dna.chaos,
+    dna_relatability: meme.dna.relatability,
+    dna_brainrot: meme.dna.brainrot,
+    dna_wholesome: meme.dna.wholesome,
+    dna_absurdity: meme.dna.absurdity,
+    created_at: meme.created_at,
+    updated_at: meme.updated_at,
+  };
+
   try {
-    const upsert = await admin.from("memes").upsert(
-      {
-        id: meme.id,
-        creator_id: canonCreatorId,
-        caption: meme.caption,
-        description: meme.description || "",
-        category: meme.category,
-        tags: meme.tags,
-        media_type: meme.media_type,
-        media_url: meme.media_url,
-        thumbnail_url: meme.thumbnail_url,
-        width: meme.width,
-        height: meme.height,
-        duration: meme.duration,
-        initial_price: meme.initial_price,
-        current_price: meme.current_price,
-        net_invested: meme.net_invested,
-        total_invested: meme.total_invested,
-        total_sell_value: meme.total_sell_value,
-        open_price_24h: meme.open_price_24h,
-        all_time_high: meme.all_time_high,
-        volume_24h: meme.volume_24h,
-        momentum: meme.momentum,
-        views: meme.views,
-        saves: meme.saves,
-        remix_count: meme.remix_count,
-        battle_wins: meme.battle_wins,
-        battle_losses: meme.battle_losses,
-        status: meme.status,
-        parent_meme_id: meme.parent_meme_id,
-        epitaph: meme.epitaph,
-        source: meme.source,
-        source_url: meme.source_url,
-        source_handle: meme.source_handle,
-        dna_humor: meme.dna.humor,
-        dna_chaos: meme.dna.chaos,
-        dna_relatability: meme.dna.relatability,
-        dna_brainrot: meme.dna.brainrot,
-        dna_wholesome: meme.dna.wholesome,
-        dna_absurdity: meme.dna.absurdity,
-        created_at: meme.created_at,
-        updated_at: meme.updated_at,
-      },
-      { onConflict: "id" }
-    );
-    if (meme.media_type === "text") noteTextTableSyncResult(upsert.error ?? null);
+    const upsert = await admin.from("memes").upsert(basePayload, { onConflict: "id" });
+    if (upsert.error && meme.media_type === "text") {
+      noteTextTableSyncResult(upsert.error);
+      // Fallback for when Supabase table check constraint has not been migrated yet
+      await admin.from("memes").upsert(
+        {
+          ...basePayload,
+          media_type: "image",
+          source: "text",
+          media_url: "text://",
+          thumbnail_url: "text://",
+        },
+        { onConflict: "id" }
+      );
+    }
   } catch (err) {
     console.error("Supabase syncMeme error:", err);
   }
@@ -395,6 +405,10 @@ const CLOUD_STATE_FILE = "cloud_db.json";
 // snapshot every cycle.
 let snapshotTextCache: { memes: Meme[]; at: number } | null = null;
 
+export function invalidateSnapshotTextCache(): void {
+  snapshotTextCache = null;
+}
+
 async function loadSnapshotTextMemes(): Promise<Meme[]> {
   if (snapshotTextCache && Date.now() - snapshotTextCache.at < 5 * 60_000) return snapshotTextCache.memes;
   try {
@@ -413,19 +427,28 @@ async function loadSnapshotTextMemes(): Promise<Meme[]> {
   }
 }
 
+let snapshotUploadInFlight = false;
+let lastSnapshotUploadAt = 0;
+
 /** Persist authoritative cloud snapshot to Supabase Cloud Storage (ensures serverless resilience) */
 export async function persistSnapshotToSupabase(state: DB): Promise<void> {
   const admin = createAdminClient();
   if (!admin) return;
+  const now = Date.now();
+  if (snapshotUploadInFlight || now - lastSnapshotUploadAt < 3000) return;
 
+  snapshotUploadInFlight = true;
   try {
     const serialized = Buffer.from(JSON.stringify(state));
     await admin.storage.from("system").upload(CLOUD_STATE_FILE, serialized, {
       contentType: "application/json",
       upsert: true,
     });
+    lastSnapshotUploadAt = Date.now();
   } catch (err) {
     console.warn("Supabase persistSnapshot warning:", err);
+  } finally {
+    snapshotUploadInFlight = false;
   }
 }
 
@@ -450,12 +473,12 @@ export async function hydrateFromSupabase(): Promise<DB | null> {
       admin.from("memes").select("*").order("created_at", { ascending: false }),
       admin.from("profiles").select("*"),
       admin.from("holdings").select("*"),
-      admin.from("transactions").select("*"),
-      admin.from("comments").select("*"),
+      admin.from("transactions").select("*").order("created_at", { ascending: false }).limit(500),
+      admin.from("comments").select("*").order("created_at", { ascending: false }).limit(1000),
       admin.from("follows").select("*"),
       admin.from("saved_memes").select("*"),
       admin.from("notifications").select("*").order("created_at", { ascending: false }).limit(300),
-      admin.from("calls").select("*"),
+      admin.from("calls").select("*").order("created_at", { ascending: false }).limit(500),
     ]);
     if (memeErr) console.error("[Supabase Sync] Error fetching memes:", memeErr);
 
@@ -463,16 +486,18 @@ export async function hydrateFromSupabase(): Promise<DB | null> {
       `[Supabase Sync] Hydrated ${dbMemes?.length || 0} memes, ${dbProfiles?.length || 0} profiles, ${dbFollows?.length || 0} follows, ${dbSavedMemes?.length || 0} saved memes from PostgreSQL.`
     );
     // Form structured DB object
-    const reconstructedMemes: Meme[] = (dbMemes || []).map((m: any) => ({
+    const reconstructedMemes: Meme[] = (dbMemes || []).map((m: any) => {
+      const isTextMeme = m.media_type === "text" || m.source === "text" || m.media_url === "text://" || m.thumbnail_url === "text://";
+      return {
         id: m.id,
         creator_id: m.creator_id,
         caption: m.caption,
         description: m.description || "",
         category: m.category,
         tags: m.tags || [],
-        media_type: m.media_type,
-        media_url: m.media_url,
-        thumbnail_url: m.thumbnail_url || m.media_url,
+        media_type: isTextMeme ? "text" : m.media_type,
+        media_url: m.media_url === "text://" ? "" : (m.media_url || ""),
+        thumbnail_url: m.thumbnail_url === "text://" ? "" : (m.thumbnail_url || m.media_url || ""),
         width: m.width || 800,
         height: m.height || 800,
         duration: m.duration,
@@ -506,7 +531,8 @@ export async function hydrateFromSupabase(): Promise<DB | null> {
         },
         created_at: m.created_at,
         updated_at: m.updated_at,
-      }));
+      };
+    });
 
       const reconstructedUsers: Profile[] = (dbProfiles || []).map((p: any) => ({
         id: p.id,

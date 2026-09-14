@@ -5,11 +5,20 @@ import { predictionIQ, titleFor } from "./progression";
 import { toCanonicalUuid } from "./sync";
 import type { AuraCall, Meme, MemeView, PositionView, Profile, PublicUser } from "../types";
 
+const publicUserCache = new Map<string, { tick: number; followsCount: number; u: PublicUser }>();
+
 export function publicUser(u: Profile, viewerId?: string | null): PublicUser {
   const d = db();
+  const tick = d.meta?.tick_count ?? 0;
   const canonUserId = toCanonicalUuid(u.id);
   const canonViewerId = viewerId ? toCanonicalUuid(viewerId) : null;
-  return {
+  const cacheKey = `${canonUserId}:${canonViewerId ?? ""}`;
+  const cached = publicUserCache.get(cacheKey);
+  if (cached && cached.tick === tick && cached.followsCount === (d.follows?.length ?? 0)) {
+    return cached.u;
+  }
+
+  const res: PublicUser = {
     id: u.id,
     username: u.username,
     display_name: u.display_name,
@@ -39,6 +48,8 @@ export function publicUser(u: Profile, viewerId?: string | null): PublicUser {
       ? d.follows.some((f) => toCanonicalUuid(f.follower_id) === canonUserId && toCanonicalUuid(f.following_id) === canonViewerId)
       : undefined,
   };
+  publicUserCache.set(cacheKey, { tick, followsCount: d.follows?.length ?? 0, u: res });
+  return res;
 }
 
 
@@ -58,18 +69,27 @@ export function positionFor(userId: string | null | undefined, memeId: string): 
   };
 }
 
+const smartMoneyCache = new Map<string, { tick: number; res: { legends: number; aura: number } }>();
+
 // Smart Money: high-Prediction-IQ investors already in this meme
-function smartMoneyFor(memeId: string): { legends: number; aura: number } {
+function smartMoneyFor(memeId: string, currentPrice?: number): { legends: number; aura: number } {
   const d = db();
+  const tick = d.meta?.tick_count ?? 0;
+  const cached = smartMoneyCache.get(memeId);
+  if (cached && cached.tick === tick) return cached.res;
+
   let legends = 0, aura = 0;
+  const price = currentPrice ?? (d.memes.find((m) => m.id === memeId)?.current_price ?? 0);
   for (const h of d.holdings) {
     if (h.meme_id !== memeId || h.quantity <= 1e-9) continue;
     if (predictionIQ(h.user_id) >= 75) {
       legends += 1;
-      aura += h.quantity * (d.memes.find((m) => m.id === memeId)?.current_price ?? 0);
+      aura += h.quantity * price;
     }
   }
-  return { legends, aura: round1(aura) };
+  const res = { legends, aura: round1(aura) };
+  smartMoneyCache.set(memeId, { tick, res });
+  return res;
 }
 
 function myCallFor(userId: string | null | undefined, memeId: string): MemeView["my_call"] {
@@ -130,7 +150,7 @@ export function memeView(m: Meme, viewerId?: string | null): MemeView {
     comment_count: commentCount,
     label: labelFor(m),
     heat: heatOf(m, commentCount),
-    smart_money: smartMoneyFor(m.id),
+    smart_money: smartMoneyFor(m.id, m.current_price),
     spark,
     is_saved: viewerId ? d.saved_memes.some((s) => s.user_id === viewerId && s.meme_id === m.id) : undefined,
     my_position: positionFor(viewerId, m.id),

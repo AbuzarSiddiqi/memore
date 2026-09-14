@@ -94,6 +94,12 @@ export function deleteMemoryCache(key: string): void {
   memStore.delete(key);
 }
 
+export function getMemoryCacheAge(key: string): number | null {
+  const item = memStore.get(key);
+  if (!item) return null;
+  return Date.now() - item.timestamp;
+}
+
 // ---------------------------------------------------------------- In-Flight Request Deduplication
 const inFlight = new Map<string, Promise<any>>();
 

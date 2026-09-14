@@ -57,10 +57,20 @@ export default function MessagesPage() {
     return () => window.removeEventListener("memore:chat-expired", onExpired);
   }, []);
 
-  // gentle polling: inbox refreshes every 8s while open
+  // gentle polling: inbox refreshes while active
   useEffect(() => {
-    const t = setInterval(() => refresh(), 8000);
-    return () => clearInterval(t);
+    const t = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      refresh();
+    }, 15000);
+    const onVisible = () => {
+      if (typeof document !== "undefined" && !document.hidden) refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [refresh]);
 
   // local clock for the remaining-time labels (server stays authoritative)

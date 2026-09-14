@@ -604,10 +604,16 @@ function ReelsInner() {
   }, [data]);
 
   useEffect(() => {
-    const t = setInterval(() => refresh(), 12000);
     const onTraded = () => { setTimeout(() => refresh(), 500); };
+    const onVisible = () => {
+      if (typeof document !== "undefined" && !document.hidden) refresh();
+    };
     window.addEventListener("aura:traded", onTraded);
-    return () => { clearInterval(t); window.removeEventListener("aura:traded", onTraded); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("aura:traded", onTraded);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [refresh]);
 
   const wake = useCallback(() => {

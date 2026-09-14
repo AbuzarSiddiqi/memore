@@ -399,6 +399,7 @@ export function getSeries(memeId: string, range: "1H" | "24H" | "7D" | "30D" | "
 // ---- the pulse: simulated market activity ------------------------------
 const TICK_MS = 45_000;
 const MAX_CATCHUP = 40;
+let lastMarketSaveAt = 0;
 
 export function ensureMarketFresh() {
   const d = db();
@@ -412,7 +413,11 @@ export function ensureMarketFresh() {
     ticks++;
   }
   d.meta.last_tick = last;
-  save();
+  // Throttle saving market state to disk/cloud to at most once every 3 minutes
+  if (ticks > 0 && now - lastMarketSaveAt > 180_000) {
+    lastMarketSaveAt = now;
+    save();
+  }
 }
 
 function runTick(at: Date) {

@@ -20,7 +20,7 @@ export const CHAT_TTL_MS = 24 * 60 * 60 * 1000;
 const CHATS_FILE = "chats_v2.json";
 let chatHydrationPromise: Promise<void> | null = null;
 let lastChatHydrate = 0;
-const CHAT_HYDRATE_TTL_MS = 3000;
+const CHAT_HYDRATE_TTL_MS = 10000;
 
 export async function hydrateChats(force = false): Promise<void> {
   const now = Date.now();

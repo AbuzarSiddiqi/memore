@@ -223,8 +223,18 @@ export function AppHeader() {
   const [mounted, setMounted] = useState(!inChat);
   const [visible, setVisible] = useState(!inChat);
   useEffect(() => {
-    const t = setInterval(refresh, 15000); // keep the badges fresh
-    return () => clearInterval(t);
+    const t = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      refresh();
+    }, 30000); // keep the badges fresh
+    const onVisible = () => {
+      if (typeof document !== "undefined" && !document.hidden) refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [refresh]);
   useEffect(() => {
     if (inChat) {
