@@ -228,7 +228,7 @@ export default function ChatPage() {
   const [sharePost, setSharePost] = useState(false);
   const [investMeme, setInvestMeme] = useState<MemeView | null>(null);
   const [attach, setAttach] = useState(false);
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const screenRef = useRef<HTMLDivElement | null>(null);
   const [animatingMsgIds, setAnimatingMsgIds] = useState<Record<string, "zuup" | "receive" | "unsend" | "sticker">>({});
   const [doubleTapBurst, setDoubleTapBurst] = useState<{ msgId: string; x: number; y: number } | null>(null);
   const isNearBottomRef = useRef(true);
@@ -374,47 +374,76 @@ export default function ChatPage() {
     }
   }, [detail, remaining, router]);
 
-  // 1. Lock body/html scroll so background never rubber-bands or scrolls
+  // 1. Lock document body/html position and overflow so the window cannot scroll or rubber-band
   useEffect(() => {
+    const origBodyPos = document.body.style.position;
+    const origBodyWidth = document.body.style.width;
+    const origBodyHeight = document.body.style.height;
+    const origBodyTop = document.body.style.top;
     const origBodyOverflow = document.body.style.overflow;
     const origHtmlOverflow = document.documentElement.style.overflow;
+
+    document.body.style.position = "fixed";
+    document.body.style.width = "100%";
+    document.body.style.height = "100%";
+    document.body.style.top = "0px";
     document.body.style.overflow = "hidden";
     document.documentElement.style.overflow = "hidden";
+
     return () => {
+      document.body.style.position = origBodyPos;
+      document.body.style.width = origBodyWidth;
+      document.body.style.height = origBodyHeight;
+      document.body.style.top = origBodyTop;
       document.body.style.overflow = origBodyOverflow;
       document.documentElement.style.overflow = origHtmlOverflow;
     };
   }, []);
 
-  // 2. Ensure window scroll is always 0 on mobile so the fixed header cannot shift
+  // 2. Synchronize chat viewport with Visual Viewport API (Direct DOM: 0 React setState)
   useEffect(() => {
-    const keepScrollZero = () => {
-      if (window.scrollY !== 0) {
-        window.scrollTo(0, 0);
+    const el = screenRef.current;
+    if (!el) return;
+
+    const syncViewport = () => {
+      const vv = window.visualViewport;
+      if (!vv) {
+        el.style.setProperty("--chat-vh", "100dvh");
+        el.style.setProperty("--chat-top", "0px");
+        el.style.setProperty("--chat-bottom-padding", "env(safe-area-inset-bottom, 0px)");
+        return;
+      }
+      const h = vv.height;
+      const top = vv.offsetTop;
+      el.style.setProperty("--chat-vh", `${h}px`);
+      el.style.setProperty("--chat-top", `${top}px`);
+
+      const isKeyboardOpen = window.innerHeight - h > 100;
+      el.style.setProperty(
+        "--chat-bottom-padding",
+        isKeyboardOpen ? "0px" : "env(safe-area-inset-bottom, 0px)"
+      );
+
+      // Keep newest messages visible only if user was already at the bottom
+      if (isNearBottomRef.current && listRef.current) {
+        listRef.current.scrollTop = listRef.current.scrollHeight;
       }
     };
-    window.addEventListener("scroll", keepScrollZero, { passive: true });
-    return () => window.removeEventListener("scroll", keepScrollZero);
-  }, []);
 
-  // 3. Track keyboard height from Visual Viewport API without moving the header
-  useEffect(() => {
+    syncViewport();
+
     const vv = window.visualViewport;
-    if (!vv) return;
-    const onViewport = () => {
-      const diff = window.innerHeight - vv.height;
-      setKeyboardHeight(diff > 120 ? diff : 0);
-    };
-    vv.addEventListener("resize", onViewport);
-    vv.addEventListener("scroll", onViewport);
-    onViewport();
-    return () => {
-      vv.removeEventListener("resize", onViewport);
-      vv.removeEventListener("scroll", onViewport);
-    };
+    if (vv) {
+      vv.addEventListener("resize", syncViewport);
+      vv.addEventListener("scroll", syncViewport);
+      return () => {
+        vv.removeEventListener("resize", syncViewport);
+        vv.removeEventListener("scroll", syncViewport);
+      };
+    }
   }, []);
 
-  // 4. Track whether user is near bottom of conversation
+  // 3. Track whether user is near bottom of conversation
   const handleScroll = useCallback(() => {
     const el = listRef.current;
     if (!el) return;
@@ -423,14 +452,14 @@ export default function ChatPage() {
     isNearBottomRef.current = distanceFromBottom <= threshold;
   }, []);
 
-  // 5. Preserve scroll position or keep newest messages in view if already at bottom
+  // 4. Keep newest messages in view when message count increases (only if already near bottom)
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
     if (isNearBottomRef.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [detail?.messages.length, keyboardHeight]);
+  }, [detail?.messages.length]);
 
   // 6. Initial scroll to bottom when messages first load
   useEffect(() => {
@@ -864,8 +893,12 @@ export default function ChatPage() {
   const [flashId, setFlashId] = useState<string | null>(null);
   const jumpToMessage = (msgId: string) => {
     const el = document.getElementById(`chat-msg-${msgId}`);
-    if (!el) return;
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const list = listRef.current;
+    if (!el || !list) return;
+    const listRect = list.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const offset = elRect.top - listRect.top + list.scrollTop - (listRect.height / 2) + (elRect.height / 2);
+    list.scrollTo({ top: Math.max(0, offset), behavior: "smooth" });
     setFlashId(msgId);
     try { navigator.vibrate?.(8); } catch { /* no haptics */ }
     window.setTimeout(() => setFlashId((f) => (f === msgId ? null : f)), 1600);
@@ -934,10 +967,12 @@ export default function ChatPage() {
 
   return (
     <div
-      className="chat-screen font-display fixed inset-0 z-[65] bg-[#0b0b0b] text-white flex flex-col overflow-hidden"
+      ref={screenRef}
+      className="chat-screen font-display fixed inset-x-0 z-[65] bg-[#0b0b0b] text-white flex flex-col overflow-hidden"
       style={{
-        height: "100dvh",
-        maxHeight: "100dvh",
+        top: "var(--chat-top, 0px)",
+        height: "var(--chat-vh, 100dvh)",
+        maxHeight: "var(--chat-vh, 100dvh)",
         paddingTop: "env(safe-area-inset-top, 0px)",
         overscrollBehavior: "none",
       }}
@@ -1150,7 +1185,7 @@ export default function ChatPage() {
       <div
         className="relative z-20 shrink-0 px-3.5 pt-2"
         style={{
-          paddingBottom: keyboardHeight > 0 ? "8px" : "max(16px, calc(env(safe-area-inset-bottom, 0px) + 8px))",
+          paddingBottom: "max(12px, calc(var(--chat-bottom-padding, env(safe-area-inset-bottom, 0px)) + 6px))",
         }}
       >
         {attach && (
@@ -1224,15 +1259,6 @@ export default function ChatPage() {
           </button>
         </div>
       </div>
-
-      {/* keyboard spacer - shrinks only the bottom region when keyboard is open without moving the header */}
-      {keyboardHeight > 0 && (
-        <div
-          style={{ height: `${keyboardHeight}px` }}
-          className="shrink-0 pointer-events-none transition-[height] duration-100 ease-out"
-          aria-hidden
-        />
-      )}
 
       {reactTo && (
         <>

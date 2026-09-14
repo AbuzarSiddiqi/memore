@@ -88,10 +88,12 @@
 
 /* MEMORE Chat Keyboard & Viewport Architecture */
 .chat-screen {
-  height: 100vh;
-  height: 100dvh;
-  max-height: 100vh;
-  max-height: 100dvh;
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: var(--chat-top, 0px);
+  height: var(--chat-vh, 100dvh);
+  max-height: var(--chat-vh, 100dvh);
   overscroll-behavior: none;
 }
 

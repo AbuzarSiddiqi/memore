@@ -201,14 +201,16 @@ export function ReactionTray({
   onClose: () => void;
 }) {
   const vw = typeof window !== "undefined" ? window.innerWidth : 390;
-  const vh = typeof window !== "undefined" ? window.innerHeight : 844;
+  const vv = typeof window !== "undefined" ? window.visualViewport : null;
+  const vh = vv ? vv.height : (typeof window !== "undefined" ? window.innerHeight : 844);
+  const vOffsetTop = vv ? vv.offsetTop : 0;
   const baseH = isMine ? 96 : TRAY_H;
   const h = pickerOpen ? 252 : baseH;
-  const availableAbove = rect.top - 64;
-  const availableBelow = vh - 75 - rect.bottom;
+  const availableAbove = rect.top - (vOffsetTop + 64);
+  const availableBelow = (vOffsetTop + vh) - 75 - rect.bottom;
   const below = availableAbove < h + 10 && availableBelow >= h + 10;
   let top = below ? rect.bottom + 10 : rect.top - h - 10;
-  top = Math.max(64, Math.min(top, vh - h - 75));
+  top = Math.max(vOffsetTop + 64, Math.min(top, vOffsetTop + vh - h - 75));
   const left = Math.min(Math.max(rect.left + rect.width / 2 - TRAY_W / 2, 12), vw - TRAY_W - 12);
   const trayDefs = favorites.map((id) => reactionDef(id)).filter(Boolean) as ReactionDef[];
 
