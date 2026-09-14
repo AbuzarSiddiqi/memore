@@ -18,20 +18,10 @@ import { ReactionStamps, ReactionTray, armClickGuard } from "@/components/reacti
 import { StickerArt, StickerSheet, recordStickerRecent } from "@/components/stickers";
 import { ShareSheet } from "@/components/share";
 import { Icon, type IconName } from "@/components/icons";
-import { ChatKeyboard } from "@/components/chat-keyboard";
 import { Spark } from "@/components/brand";
 
 const TRAY_KEY = "memore-chat-reactions";
 const REPLY_THRESHOLD = 64; // px of pull before a swipe becomes a reply
-
-// iPhone gets the in-app ChatKeyboard: iOS 26's native keyboard shoves the
-// page around and reports garbage viewport sizes inside a full-screen PWA, so
-// on iOS the composer input is read-only and the custom keyboard types into
-// it. Android/desktop keep the native input.
-const IS_IOS =
-  typeof navigator !== "undefined" &&
-  (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
-    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
 
 /** Short quote line for a reply reference (message or post). */
 function quoteText(q: { type: ChatMessageView["type"]; content: string; sticker_id?: string | null; post?: { caption: string } | null }): string {
@@ -228,16 +218,12 @@ export default function ChatPage() {
   const [gone, setGone] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  const [kbOpen, setKbOpen] = useState(false); // iPhone's in-app keyboard
-  const userTouchRef = useRef(false); // true while the user's finger scrolls the message list
+  const [kbFocused, setKbFocused] = useState(false); // native keyboard open → tighten the composer's bottom padding
   const [menu, setMenu] = useState(false);
   const [sharePost, setSharePost] = useState(false);
   const [investMeme, setInvestMeme] = useState<MemeView | null>(null);
   const [attach, setAttach] = useState(false);
   const screenRef = useRef<HTMLDivElement | null>(null);
-  const debugRef = useRef<HTMLDivElement | null>(null);
-  const debugOn = typeof window !== "undefined" && window.location.search.includes("chatdebug");
-  const baseRef = useRef(0); // true full-screen height, measured while idle (iOS 26 PWA lies about it)
   const [animatingMsgIds, setAnimatingMsgIds] = useState<Record<string, "zuup" | "receive" | "unsend" | "sticker">>({});
   const [doubleTapBurst, setDoubleTapBurst] = useState<{ msgId: string; x: number; y: number } | null>(null);
   const isNearBottomRef = useRef(true);
@@ -383,190 +369,38 @@ export default function ChatPage() {
     }
   }, [detail, remaining, router]);
 
-  // 1. Lock document body/html position and overflow so the window cannot scroll or rubber-band
-  useEffect(() => {
-    const origBodyPos = document.body.style.position;
-    const origBodyWidth = document.body.style.width;
-    const origBodyHeight = document.body.style.height;
-    const origBodyTop = document.body.style.top;
-    const origBodyOverflow = document.body.style.overflow;
-    const origHtmlOverflow = document.documentElement.style.overflow;
-
-    document.body.style.position = "fixed";
-    document.body.style.width = "100%";
-    document.body.style.height = "100%";
-    document.body.style.top = "0px";
-    document.body.style.overflow = "hidden";
-    document.documentElement.style.overflow = "hidden";
-
-    return () => {
-      document.body.style.position = origBodyPos;
-      document.body.style.width = origBodyWidth;
-      document.body.style.height = origBodyHeight;
-      document.body.style.top = origBodyTop;
-      document.body.style.overflow = origBodyOverflow;
-      document.documentElement.style.overflow = origHtmlOverflow;
-    };
+  // 1. The chat is a NORMAL scrolling page — the same architecture as every
+  // website that works on an iPhone: a sticky header, messages in the page
+  // flow, a sticky composer, and iOS's own keyboard handling. The page scrolls
+  // when the keyboard opens (exactly like a plain website), the header and
+  // composer stick to the viewport, and no code fights the OS — the source of
+  // every previous failure is simply gone. Only scroll bookkeeping remains.
+  const scrollToEnd = useCallback(() => {
+    window.scrollTo(0, document.documentElement.scrollHeight);
   }, []);
 
-  // 2. Keyboard handling — the signals iOS gives are LIES until sanitised.
-  // Measured on iOS 26 (iPhone 13 Pro PWA): the keyboard is a pure overlay,
-  // iOS pushes the whole page up by the keyboard height (fixed elements ride
-  // it), AND visualViewport.height reports garbage — a smaller resting value
-  // than the screen (home-area inset) and near-zero transients while the
-  // keyboard animates in. Trusting those numbers shrank the chat at rest
-  // (bottom gap) and collapsed it to nothing on focus ("everything vanish").
-  // So every signal is gated:
-  //   push         = vv.offsetTop + pageYOffset — iOS's reveal push (real).
-  //   rawShrink    = innerHeight − vv.height — only trusted when it is within
-  //                  [150px, 70% of the screen]: a real keyboard. Anything
-  //                  else is a quirk/transient and is discarded.
-  //   keyboard     = max(push, trustedShrink, base − innerHeight) — the last
-  //                  term covers platforms where innerHeight itself resizes.
-  //   base         = the true full-screen height, measured while IDLE (never
-  //                  during a keyboard animation); in the installed PWA the
-  //                  app owns the whole screen, so a shrunken innerHeight is
-  //                  corrected with screen.height. Cached in a ref so Android
-  //                  (where innerHeight legitimately resizes) is unaffected.
-  // The root is placed at top = push (cancelling iOS's push in layout coords)
-  // with height = base − keyboard, tracked in a CONTINUOUS rAF loop while the
-  // keyboard may be animating, so neither stale events nor garbage frames can
-  // displace it. Net result on every device: the header stays at the top of
-  // the screen, the composer sits exactly on the keyboard edge, the chat
-  // reaches the bottom of the screen, and no transient ever collapses it.
+  // 2. Near-bottom tracking on the page scroll
   useEffect(() => {
-    const el = screenRef.current;
-    if (!el) return;
-
-    const isEditable = (n: Element | null) =>
-      !!n && (n.tagName === "INPUT" || n.tagName === "TEXTAREA" || (n as HTMLElement).isContentEditable);
-
-    const isStandalone =
-      (navigator as Navigator & { standalone?: boolean }).standalone === true ||
-      (typeof window.matchMedia === "function" && window.matchMedia("(display-mode: standalone)").matches);
-
-    let rafId = 0;
-    let running = false;
-    let lastTop = "";
-    let lastH = "";
-    let lastPad = "";
-
-    const syncViewport = () => {
-      const vv = window.visualViewport;
-      const ivh = window.innerHeight;
-      const screenH = typeof window.screen !== "undefined" ? window.screen.height || 0 : 0;
-      const push = (vv?.offsetTop ?? 0) + (window.pageYOffset ?? 0);
-      const rawShrink = Math.max(0, ivh - (vv?.height ?? ivh));
-      const trustedShrink = rawShrink >= 150 && rawShrink <= ivh * 0.7 ? rawShrink : 0;
-      const keyboard = Math.max(push, trustedShrink, baseRef.current - ivh);
-
-      // The true full-screen height, measured only while idle (keyboard=0):
-      // in the installed PWA the app owns the entire screen even when iOS
-      // reports a smaller innerHeight; in the browser innerHeight is truth.
-      if (keyboard === 0 && Math.abs(push) < 20) {
-        baseRef.current = isStandalone && screenH > ivh ? screenH : ivh;
-      }
-      const base = baseRef.current || ivh;
-      const rootH = Math.max(0, base - keyboard);
-
-      const top = `${push}px`;
-      const h = `${rootH}px`;
-      if (top !== lastTop) { el.style.setProperty("--chat-top", top); lastTop = top; }
-      if (h !== lastH) { el.style.setProperty("--chat-h", h); lastH = h; }
-
-      const keyboardOpen = keyboard >= 150 || (isEditable(document.activeElement) && push > 60);
-      const pad = keyboardOpen ? "0px" : "env(safe-area-inset-bottom, 0px)";
-      if (pad !== lastPad) { el.style.setProperty("--chat-bottom-padding", pad); lastPad = pad; }
-
-      // Keep newest messages visible only if user was already at the bottom
-      if (isNearBottomRef.current && listRef.current) {
-        listRef.current.scrollTop = listRef.current.scrollHeight;
-      }
-
-      if (debugRef.current) {
-        debugRef.current.textContent =
-          `ivh=${ivh} vv=${vv?.height ?? "?"} off=${vv?.offsetTop ?? "?"} scr=${window.pageYOffset ?? 0} screenH=${screenH}\n` +
-          `push=${push} rawShrink=${rawShrink} kb=${keyboard} base=${base} root=${rootH}`;
-      }
+    const onScroll = () => {
+      const doc = document.documentElement;
+      isNearBottomRef.current = doc.scrollHeight - window.scrollY - window.innerHeight <= 140;
     };
-
-    const tick = () => {
-      syncViewport();
-      const vv = window.visualViewport;
-      const push = (vv?.offsetTop ?? 0) + (window.pageYOffset ?? 0);
-      const shrunk = Math.max(0, window.innerHeight - (vv?.height ?? window.innerHeight));
-      const focused = isEditable(document.activeElement);
-      if (focused || Math.abs(push) > 1 || shrunk > 1) {
-        rafId = requestAnimationFrame(tick); // keep 1:1 with the OS keyboard/push animation
-      } else {
-        running = false;
-      }
-    };
-
-    const kick = () => {
-      if (!running) { running = true; rafId = requestAnimationFrame(tick); }
-    };
-
-    // Prime the base height before first paint of the layout.
-    baseRef.current = (() => {
-      const screenH = typeof window.screen !== "undefined" ? window.screen.height || 0 : 0;
-      return isStandalone && screenH > window.innerHeight ? screenH : window.innerHeight;
-    })();
-    syncViewport();
-    const vv = window.visualViewport;
-    vv?.addEventListener("resize", kick);
-    window.addEventListener("resize", kick);
-    document.addEventListener("focusin", kick);
-    document.addEventListener("focusout", kick); // keep ticking while iOS releases the push
-
-    return () => {
-      cancelAnimationFrame(rafId);
-      vv?.removeEventListener("resize", kick);
-      window.removeEventListener("resize", kick);
-      document.removeEventListener("focusin", kick);
-      document.removeEventListener("focusout", kick);
-    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  // 3. Track whether user is near bottom of conversation
-  const handleScroll = useCallback(() => {
-    const el = listRef.current;
-    if (!el) return;
-    const threshold = 140;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    isNearBottomRef.current = distanceFromBottom <= threshold;
-    // A finger on the message list dismisses the in-app keyboard (programmatic
-    // pin-scrolls don't — they never set userTouchRef).
-    if (userTouchRef.current) setKbOpen(false);
-  }, []);
-
-  // When the in-app keyboard appears, the message list shrinks around it —
-  // keep the newest message pinned if the user was already at the bottom.
+  // 3. Keep newest messages in view when message count increases (only if already near bottom)
   useEffect(() => {
-    if (kbOpen && isNearBottomRef.current && listRef.current) {
-      listRef.current.scrollTop = listRef.current.scrollHeight;
-    }
-  }, [kbOpen]);
+    if (isNearBottomRef.current) scrollToEnd();
+  }, [detail?.messages.length, scrollToEnd]);
 
-  // 4. Keep newest messages in view when message count increases (only if already near bottom)
-  useEffect(() => {
-    const el = listRef.current;
-    if (!el) return;
-    if (isNearBottomRef.current) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [detail?.messages.length]);
-
-  // 6. Initial scroll to bottom when messages first load
+  // 4. Initial scroll to bottom when messages first load
   useEffect(() => {
     if (detail?.messages && detail.messages.length > 0 && !initialScrollDone.current) {
-      const el = listRef.current;
-      if (el) {
-        el.scrollTop = el.scrollHeight;
-        initialScrollDone.current = true;
-      }
+      scrollToEnd();
+      initialScrollDone.current = true;
     }
-  }, [detail?.messages]);
+  }, [detail?.messages, scrollToEnd]);
 
   // ----- reactions: HOLD → tray (R1 armed) → glide over slots → release applies -----
   const clearPress = useCallback(() => {
@@ -904,8 +738,7 @@ export default function ChatPage() {
     // 5. Scroll to bottom
     isNearBottomRef.current = true;
     requestAnimationFrame(() => {
-      const el = listRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
+      window.scrollTo(0, document.documentElement.scrollHeight);
     });
 
     try {
@@ -989,12 +822,9 @@ export default function ChatPage() {
   const [flashId, setFlashId] = useState<string | null>(null);
   const jumpToMessage = (msgId: string) => {
     const el = document.getElementById(`chat-msg-${msgId}`);
-    const list = listRef.current;
-    if (!el || !list) return;
-    const listRect = list.getBoundingClientRect();
-    const elRect = el.getBoundingClientRect();
-    const offset = elRect.top - listRect.top + list.scrollTop - (listRect.height / 2) + (elRect.height / 2);
-    list.scrollTo({ top: Math.max(0, offset), behavior: "smooth" });
+    if (!el) return;
+    const top = el.getBoundingClientRect().top + window.scrollY - (window.innerHeight / 2) + (el.getBoundingClientRect().height / 2);
+    window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
     setFlashId(msgId);
     try { navigator.vibrate?.(8); } catch { /* no haptics */ }
     window.setTimeout(() => setFlashId((f) => (f === msgId ? null : f)), 1600);
@@ -1065,28 +895,20 @@ export default function ChatPage() {
     <>
       <div
         ref={screenRef}
-        className="chat-screen font-display fixed inset-x-0 z-[65] bg-[#0b0b0b] text-white flex flex-col overflow-hidden"
+        className="chat-screen font-display relative z-[65] bg-[#0b0b0b] text-white flex flex-col"
         style={{
-          paddingTop: "max(12px, env(safe-area-inset-top, 24px))",
-          overscrollBehavior: "none",
+          minHeight: "100dvh",
+          // neutralise the app shell's <main> paddings — the chat owns the screen
+          margin: "-8px 0 -128px",
         }}
       >
         <ScreenFrame />
-        {debugOn && (
-          <div
-            ref={debugRef}
-            aria-hidden
-            style={{
-              position: "fixed", top: "calc(var(--chat-top, 0px) + 2px)", left: 2, zIndex: 999, pointerEvents: "none",
-              background: "rgba(0,0,0,0.85)", color: "#C8FF3D", font: "11px/1.5 monospace",
-              padding: "4px 6px", borderRadius: 6, whiteSpace: "pre",
-            }}
-          />
-        )}
         {clickShield && <div className="absolute inset-0 z-[80]" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} />}
 
-      {/* header - stays fixed at top */}
-      <header className="relative z-10 flex shrink-0 items-center gap-2.5 px-4 pt-1.5 pb-2">
+      {/* header — sticky: stays pinned to the top of the screen while the
+          page scrolls, exactly like a plain website on the iPhone */}
+      <div className="sticky top-0 z-30 bg-[#0b0b0b]">
+        <header className="relative z-10 flex shrink-0 items-center gap-2.5 px-4 pt-[max(12px,env(safe-area-inset-top))] pb-2">
         <button onClick={() => router.push("/messages")} aria-label="Back to Messages" className="shrink-0 text-white transition-transform active:scale-90">
           <Icon name="arrow-left" size={21} strokeWidth={2.4} />
         </button>
@@ -1109,23 +931,15 @@ export default function ChatPage() {
           <span className="mb-1 block h-1 w-1 rounded-full bg-current" />
           <span className="block h-1 w-1 rounded-full bg-current" />
         </button>
-      </header>
+        </header>
 
-      <HeaderRule />
+        <HeaderRule />
+      </div>
 
-      {/* messages */}
+      {/* messages — plain page flow; the page itself is the scroller */}
       <div
         ref={listRef}
-        onScroll={handleScroll}
-        onTouchStart={() => { userTouchRef.current = true; }}
-        onTouchEnd={() => { setTimeout(() => { userTouchRef.current = false; }, 250); }}
-        onTouchCancel={() => { setTimeout(() => { userTouchRef.current = false; }, 250); }}
-        className="relative z-10 flex min-h-0 flex-1 flex-col overflow-y-auto no-scrollbar px-4 pb-2 pt-1"
-        style={{
-          overscrollBehavior: "contain",
-          WebkitOverflowScrolling: "touch",
-          touchAction: "pan-y",
-        }}
+        className="relative z-10 flex flex-1 flex-col px-4 pb-2 pt-1"
       >
         {/* mt-auto hugs the composer when the thread is short, scrolls normally when it grows */}
         <div className="mt-auto flex flex-col space-y-3">
@@ -1289,11 +1103,15 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* composer */}
+      {/* composer — sticky: rides the bottom of the screen while the page
+          scrolls, and iOS nudges the page up behind it when the keyboard
+          opens, exactly like a plain website */}
       <div
-        className="relative z-20 shrink-0 px-3.5 pt-2"
+        className="sticky bottom-0 z-20 bg-[#0b0b0b] px-3.5 pt-2"
         style={{
-          paddingBottom: "calc(var(--chat-bottom-padding, env(safe-area-inset-bottom, 0px)) + 6px)",
+          paddingBottom: kbFocused
+            ? "6px"
+            : "max(12px, calc(env(safe-area-inset-bottom, 0px) - 10px))",
         }}
       >
         {attach && (
@@ -1326,7 +1144,7 @@ export default function ChatPage() {
           </div>
         )}
         <div className="flex items-center gap-2.5">
-          <button onClick={() => { setKbOpen(false); setAttach((a) => !a); }} aria-label="Attach" className="relative flex h-[42px] w-[42px] shrink-0 items-center justify-center text-white/90 transition-transform active:scale-90">
+          <button onClick={() => setAttach((a) => !a)} aria-label="Attach" className="relative flex h-[42px] w-[42px] shrink-0 items-center justify-center text-white/90 transition-transform active:scale-90">
             <WobblyCircle fill="#101010" stroke="#7C4DFF" />
             <span className="relative"><Icon name="plus" size={19} strokeWidth={2.6} /></span>
           </button>
@@ -1342,23 +1160,22 @@ export default function ChatPage() {
               placeholder="say something..."
               value={text}
               maxLength={280}
-              readOnly={IS_IOS}
-              inputMode={IS_IOS ? "none" : undefined}
-              onClick={() => { if (IS_IOS) setKbOpen(true); }}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") sendText(); }}
-              aria-label="Message"
-              enterKeyHint={IS_IOS ? undefined : "send"}
               onFocus={(e) => {
-                // Prevent iOS from scrolling/panning the page to center this
-                // input. On iPhone the input is read-only (custom keyboard
-                // types into it), so the native keyboard never opens at all.
+                // iOS scrolls the page itself to reveal the input — let it.
+                // Only bookkeeping here: tighter padding while typing, and no
+                // programmatic scrollIntoView for iOS to fight.
+                setKbFocused(true);
                 e.target.scrollIntoView = () => {};
               }}
+              onBlur={() => setKbFocused(false)}
+              aria-label="Message"
+              enterKeyHint="send"
             />
           </div>
           <button
-            onClick={() => { (document.activeElement as HTMLElement | null)?.blur?.(); setKbOpen(false); setStickersOpen(true); }}
+            onClick={() => { (document.activeElement as HTMLElement | null)?.blur?.(); setStickersOpen(true); }}
             aria-label="Stickers"
             className="relative flex h-[38px] w-[38px] shrink-0 items-center justify-center text-white/90 transition-transform active:scale-90"
           >
@@ -1377,17 +1194,6 @@ export default function ChatPage() {
           </button>
         </div>
       </div>
-
-      {/* in-app keyboard — iPhone only; the native keyboard never opens here */}
-      {IS_IOS && kbOpen && (
-        <ChatKeyboard
-          value={text}
-          onInsert={(ch) => setText((t) => (t + ch).slice(0, 280))}
-          onBackspace={() => setText((t) => t.slice(0, -1))}
-          onSend={() => sendText()}
-          onClose={() => setKbOpen(false)}
-        />
-      )}
 
       {reactTo && (
         <>

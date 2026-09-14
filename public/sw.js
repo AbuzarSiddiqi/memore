@@ -2,7 +2,7 @@
 // Bump the cache version on every deploy that changes app code: the activate
 // handler deletes every older cache, so clients pick up fresh bundles instead
 // of silently serving stale pages (the "my fix isn't showing up" bug).
-const CACHE = "memore-v6";
+const CACHE = "memore-v7";
 const SHELL = ["/", "/home", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"];
 
 self.addEventListener("install", (event) => {
