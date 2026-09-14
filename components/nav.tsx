@@ -13,9 +13,9 @@ import type { MemeView } from "@/lib/types";
 interface MobileNavItem { href: string; label: string; icon: IconName; emphasize?: boolean }
 const MOBILE_NAV: MobileNavItem[] = [
   { href: "/home", label: "Home", icon: "home" },
-  { href: "/market", label: "Market", icon: "chart" },
-  { href: "/reels", label: "Memes", icon: "sprout", emphasize: true },
   { href: "/vault", label: "Vault", icon: "bag" },
+  { href: "/reels", label: "Memes", icon: "sprout", emphasize: true },
+  { href: "/messages", label: "Chat", icon: "chat" },
   { href: "/profile", label: "Profile", icon: "user" },
 ];
 
@@ -89,6 +89,8 @@ export function BottomNav() {
   const inChat = pathname.startsWith("/messages/");
   const [mounted, setMounted] = useState(!inChat);
   const [visible, setVisible] = useState(!inChat);
+  const { data: notifData } = useApi<{ unread: number; chatUnread: number }>("/api/notifications");
+  const chatUnread = notifData?.chatUnread ?? 0;
   // center-button launch: diamond spins + blob grows, a purple veil expands
   // from the button, then the reels page is revealed behind it.
   const [launching, setLaunching] = useState(false);
@@ -152,6 +154,11 @@ export function BottomNav() {
                     </>
                   )}
                   <NavIcon name={item.icon} size={22} />
+                  {item.href === "/messages" && chatUnread > 0 && (
+                    <span className="badge-dot absolute -top-1.5 -right-2">
+                      {chatUnread > 9 ? "9+" : chatUnread}
+                    </span>
+                  )}
                 </span>
                 <span className="font-display text-[15px] leading-none">{item.label}</span>
               </Link>
@@ -174,11 +181,12 @@ export function SideNav() {
 
   const items = [
     { href: "/home", label: "Home", icon: "home" },
+    { href: "/vault", label: "Vault", icon: "bag" },
     { href: "/reels", label: "Reels", icon: "spark" },
     { href: "/market", label: "Market", icon: "chart" },
+    { href: "/messages", label: "Chat", icon: "chat" },
     { href: "/hunter", label: "Meme Hunter", icon: "target" },
     { href: "/create", label: "Create", icon: "upload" },
-    { href: "/vault", label: "Vault", icon: "lock" },
     { href: "/leaderboard", label: "Leaderboard", icon: "trophy" },
     { href: "/battles", label: "Battles", icon: "swords" },
     { href: "/notifications", label: "Notifications", icon: "bell" },
@@ -257,22 +265,13 @@ export function AppHeader() {
           <MemoreLogo markSize={36} wordSize={21} />
         </Link>
         <div className="flex items-center gap-2">
-          <Link href="/create" className="neo-btn icon" aria-label="Upload a meme" title="Upload a meme">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-          </Link>
-          <Link href="/search" className="neo-btn icon" aria-label="Search">
+          <Link href="/search" className={`neo-btn icon ${pathname === "/search" ? "active" : ""}`} aria-label="Search" title="Search">
             <NavIcon name="search" size={17} />
           </Link>
-          <Link href="/messages" className="neo-btn icon relative" aria-label={`Messages${chatUnread ? `, ${chatUnread} unread` : ""}`} title="Messages — all chats expire in 24h">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="M21 11.5 a8.4 7.5 0 0 1 -8.9 7.4 c-1.2 0-2.4-.2-3.4-.6 L4 20 l1.8-4.1 A7.3 6.6 0 0 1 4.6 11.4 C4.6 7.1 8.3 4 12.5 4 s8.5 3.3 8.5 7.5" />
-              <path d="M8.5 10.5 h.01 M12.5 10.5 h.01 M16.5 10.5 h.01" strokeWidth="2.6" />
-            </svg>
-            {chatUnread > 0 && <span className="badge-dot">{chatUnread > 9 ? "9+" : chatUnread}</span>}
+          <Link href="/market" className={`neo-btn icon ${pathname.startsWith("/market") ? "active" : ""}`} aria-label="Market — explore meme prices and trending" title="Market">
+            <NavIcon name="chart" size={17} />
           </Link>
-          <Link href="/notifications" className="neo-btn icon relative" aria-label={`Notifications${unread ? `, ${unread} unread` : ""}`}>
+          <Link href="/notifications" className={`neo-btn icon relative ${pathname === "/notifications" ? "active" : ""}`} aria-label={`Notifications${unread ? `, ${unread} unread` : ""}`} title="Notifications">
             <NavIcon name="bell" size={17} />
             {unread > 0 && <span className="badge-dot">{unread > 9 ? "9+" : unread}</span>}
           </Link>

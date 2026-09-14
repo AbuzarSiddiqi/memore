@@ -416,13 +416,13 @@ export default function ChatPage() {
       const baseH = initialScreenHeightRef.current > 0 ? initialScreenHeightRef.current : currentWinH;
 
       if (!vv) {
-        el.style.setProperty("--chat-vh", "100%");
+        el.style.setProperty("--chat-bottom", "0px");
         el.style.setProperty("--chat-top", "0px");
         el.style.setProperty("--chat-bottom-padding", "env(safe-area-inset-bottom, 0px)");
         if (frameRef.current) {
-          const sat = Math.max(10, (parseFloat(getComputedStyle(el).paddingTop) || 24) - 4);
-          frameRef.current.style.top = `${sat}px`;
-          frameRef.current.style.height = `${currentWinH - sat - 6}px`;
+          frameRef.current.style.bottom = "";
+          frameRef.current.style.top = "";
+          frameRef.current.style.height = "";
         }
         return;
       }
@@ -445,27 +445,29 @@ export default function ChatPage() {
         }
 
         // Full screen height down to the absolute bottom:
-        el.style.setProperty("--chat-vh", "100%");
+        el.style.setProperty("--chat-bottom", "0px");
         el.style.setProperty("--chat-top", "0px");
         el.style.setProperty("--chat-bottom-padding", "env(safe-area-inset-bottom, 0px)");
 
-        // Frame sits below status bar and reaches exactly 6px from the bottom corners:
-        if (frameRef.current) {
-          const sat = Math.max(10, (parseFloat(getComputedStyle(el).paddingTop) || 24) - 4);
-          frameRef.current.style.top = `${sat}px`;
-          frameRef.current.style.height = `${(initialScreenHeightRef.current || currentWinH) - sat - 6}px`;
+        // Clear any keyboard-freeze styles on frame so it naturally follows CSS to bottom corners:
+        if (frameRef.current && frameRef.current.style.height) {
+          frameRef.current.style.bottom = "";
+          frameRef.current.style.top = "";
+          frameRef.current.style.height = "";
         }
       } else {
         // Keyboard is OPEN:
-        el.style.setProperty("--chat-vh", `${h}px`);
+        const kbH = Math.max(0, baseH - h);
+        el.style.setProperty("--chat-bottom", `${kbH}px`);
         el.style.setProperty("--chat-top", `${top}px`);
         el.style.setProperty("--chat-bottom-padding", "0px");
 
-        // Frame stays fixed at the bottom corners — NEVER shrinks or moves up with keyboard!
-        if (frameRef.current) {
-          const sat = Math.max(10, (parseFloat(getComputedStyle(el).paddingTop) || 24) - 4);
-          frameRef.current.style.top = `${top + sat}px`;
-          frameRef.current.style.height = `${(initialScreenHeightRef.current || currentWinH) - sat - 6}px`;
+        // Freeze frame so Safari does not move the bottom frame up when keyboard appears:
+        if (frameRef.current && !frameRef.current.style.height) {
+          const rect = frameRef.current.getBoundingClientRect();
+          frameRef.current.style.bottom = "auto";
+          frameRef.current.style.top = `${rect.top}px`;
+          frameRef.current.style.height = `${rect.height}px`;
         }
       }
 
@@ -1023,9 +1025,7 @@ export default function ChatPage() {
         className="chat-screen font-display fixed inset-x-0 z-[65] bg-[#0b0b0b] text-white flex flex-col overflow-hidden"
         style={{
           top: "var(--chat-top, 0px)",
-          bottom: "0px",
-          height: "var(--chat-vh, 100%)",
-          maxHeight: "var(--chat-vh, 100%)",
+          bottom: "var(--chat-bottom, 0px)",
           paddingTop: "max(12px, env(safe-area-inset-top, 24px))",
           overscrollBehavior: "none",
         }}

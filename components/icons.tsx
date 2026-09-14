@@ -8,7 +8,7 @@ export type IconName =
   | "home" | "chart" | "chart-down" | "lock" | "user" | "users" | "trophy" | "swords"
   | "bell" | "gear" | "shield" | "hand" | "search" | "upload" | "skull" | "target"
   | "flame" | "rocket" | "gem" | "sprout" | "egg" | "alert" | "brain" | "star"
-  | "repeat" | "flag" | "megaphone" | "share" | "comment" | "ghost" | "clock"
+  | "repeat" | "flag" | "megaphone" | "share" | "comment" | "chat" | "ghost" | "clock"
   | "inbox" | "receipt" | "volume-off" | "volume-on" | "play" | "video" | "camera"
   | "coin" | "bird" | "paint" | "globe" | "spiral" | "crown" | "orb" | "bag"
   | "medal" | "bolt" | "storm" | "laugh" | "paw" | "cat" | "laptop" | "torii"
@@ -205,6 +205,12 @@ const P: Record<IconName, React.ReactNode> = {
     <>
       <path d="M4 8a3.5 3.5 0 0 1 3.5-3.5h9A3.5 3.5 0 0 1 20 8v5a3.5 3.5 0 0 1-3.5 3.5H10L5.2 20l.6-3.7A3.5 3.5 0 0 1 4 13V8Z" />
       <path d="M8.5 9.8h.01M12 9.8h.01M15.5 9.8h.01" strokeWidth="2.6" />
+    </>
+  ),
+  chat: (
+    <>
+      <path d="M4.5 6.5 C 4.5 4.8, 6 3.5, 8.5 3.5 L 15.5 3.5 C 18 3.5, 19.5 4.8, 19.5 6.5 L 19.5 14 C 19.5 15.8, 18 17, 15.5 17 L 9.5 17 L 5 20.5 L 5.5 16.2 C 4.8 15.5, 4.5 14.5, 4.5 13.5 Z" />
+      <path d="M8.5 10.5 h.01 M12 10.5 h.01 M15.5 10.5 h.01" strokeWidth="2.8" />
     </>
   ),
   ghost: (

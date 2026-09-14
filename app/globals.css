@@ -92,9 +92,7 @@
   left: 0;
   right: 0;
   top: var(--chat-top, 0px);
-  bottom: 0;
-  height: var(--chat-vh, 100%);
-  max-height: var(--chat-vh, 100%);
+  bottom: var(--chat-bottom, 0px);
   overscroll-behavior: none;
 }
 
@@ -104,7 +102,7 @@
   left: 5px;
   right: 5px;
   top: max(8px, env(safe-area-inset-top, 16px));
-  height: calc(100% - max(8px, env(safe-area-inset-top, 16px)) - 6px);
+  bottom: max(6px, env(safe-area-inset-bottom, 8px));
   border: 1.5px solid rgba(124, 77, 255, 0.42);
   border-radius: 26px;
   pointer-events: none;
