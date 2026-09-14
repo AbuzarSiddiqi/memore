@@ -405,10 +405,7 @@ export default function ChatPage() {
   // change with the safe-area, the reply bar and the temp label) and reserve
   // matching bands on the root so no message ever hides behind them.
   const scrollToEnd = useCallback(() => {
-    const el = listRef.current;
-    if (el) {
-      el.scrollTop = el.scrollHeight;
-    }
+    window.scrollTo(0, document.documentElement.scrollHeight);
   }, []);
 
   // Dynamic font sizing with hysteresis:
@@ -477,18 +474,16 @@ export default function ChatPage() {
     return () => window.removeEventListener("resize", adjustTextareaHeight);
   }, [adjustTextareaHeight]);
 
-  // 1. Fixed Header measurement: measures the actual header height into --hdr-h
-  // so the independent message list reserves the exact space underneath it.
+  // 1. The header and composer are fixed overlays; measure their heights and
+  // reserve matching bands on the root so no message ever hides behind them.
   useEffect(() => {
     const el = screenRef.current;
     if (!el) return;
     const apply = () => {
-      const h = headerRef.current?.offsetHeight ?? 0;
-      if (h > 0) {
-        el.style.setProperty("--hdr-h", `${h}px`);
-      }
-      if (isNearBottomRef.current && listRef.current) {
-        listRef.current.scrollTop = listRef.current.scrollHeight;
+      el.style.setProperty("--hdr-h", `${headerRef.current?.offsetHeight ?? 0}px`);
+      el.style.setProperty("--cmp-h", `${composerRef.current?.offsetHeight ?? 0}px`);
+      if (isNearBottomRef.current) {
+        window.scrollTo(0, document.documentElement.scrollHeight);
       }
     };
     apply();
@@ -498,48 +493,14 @@ export default function ChatPage() {
     return () => ro.disconnect();
   }, []);
 
-  // 2. Near-bottom tracking on the independent message scroller
-  const handleScroll = useCallback(() => {
-    const el = listRef.current;
-    if (!el) return;
-    const threshold = 140;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    isNearBottomRef.current = distanceFromBottom <= threshold;
-  }, []);
-
-  // 3. Visual Viewport synchronization: keeps chat bottom glued directly above
-  // the on-screen keyboard on iPhone with zero gap and without moving the header.
+  // 2. Near-bottom tracking on the page scroll
   useEffect(() => {
-    const el = screenRef.current;
-    if (!el) return;
-
-    let rafId = 0;
-    const syncViewport = () => {
-      cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        const vv = window.visualViewport;
-        if (!vv) {
-          el.style.setProperty("--chat-bottom", "0px");
-          return;
-        }
-        const overlap = Math.max(0, window.innerHeight - vv.height);
-        el.style.setProperty("--chat-bottom", `${overlap}px`);
-        if (isNearBottomRef.current && listRef.current) {
-          listRef.current.scrollTop = listRef.current.scrollHeight;
-        }
-      });
+    const onScroll = () => {
+      const doc = document.documentElement;
+      isNearBottomRef.current = doc.scrollHeight - window.scrollY - window.innerHeight <= 140;
     };
-
-    syncViewport();
-    const vv = window.visualViewport;
-    vv?.addEventListener("resize", syncViewport);
-    window.addEventListener("resize", syncViewport);
-
-    return () => {
-      cancelAnimationFrame(rafId);
-      vv?.removeEventListener("resize", syncViewport);
-      window.removeEventListener("resize", syncViewport);
-    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
   // 3. Keep newest messages in view when message count increases (only if already near bottom)
@@ -1069,15 +1030,19 @@ export default function ChatPage() {
     <>
       <div
         ref={screenRef}
-        className="chat-screen font-display fixed inset-0 z-[65] bg-[#0b0b0b] text-white flex flex-col overflow-hidden max-w-2xl mx-auto"
+        className="chat-screen font-display relative z-[65] bg-[#0b0b0b] text-white flex flex-col"
         style={{
-          bottom: "var(--chat-bottom, 0px)",
+          minHeight: "100dvh",
+          width: "100vw",
+          margin: "-8px calc(50% - 50vw) -128px",
+          paddingTop: "var(--hdr-h, 108px)",
+          paddingBottom: "var(--cmp-h, 96px)",
         }}
       >
         {clickShield && <div className="absolute inset-0 z-[80]" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} />}
 
-      {/* header — FIXED permanently at the top of the chat viewport */}
-      <div ref={headerRef} className="fixed top-0 left-0 right-0 z-40 bg-[#0b0b0b] max-w-2xl mx-auto">
+      {/* header — FIXED permanently to the top of the chat viewport */}
+      <div ref={headerRef} className="fixed top-0 left-0 right-0 z-40 bg-[#0b0b0b]">
         <header className="relative z-10 flex shrink-0 items-center gap-2.5 px-4 pt-[max(12px,env(safe-area-inset-top))] pb-2">
         <button onClick={() => router.push("/messages")} aria-label="Back to Messages" className="shrink-0 text-white transition-transform active:scale-90">
           <Icon name="arrow-left" size={21} strokeWidth={2.4} />
@@ -1108,17 +1073,10 @@ export default function ChatPage() {
         <HeaderRule />
       </div>
 
-      {/* messages — INDEPENDENTLY scrollable message list */}
+      {/* messages */}
       <div
         ref={listRef}
-        onScroll={handleScroll}
-        className="relative z-10 flex-1 min-h-0 overflow-y-auto no-scrollbar px-4 pb-2 flex flex-col"
-        style={{
-          paddingTop: "var(--hdr-h, 78px)",
-          overscrollBehavior: "contain",
-          WebkitOverflowScrolling: "touch",
-          touchAction: "pan-y",
-        }}
+        className="relative z-10 flex flex-1 flex-col px-4 pb-2 pt-1"
       >
         {/* mt-auto hugs the composer when the thread is short, scrolls normally when it grows */}
         <div className="mt-auto flex flex-col space-y-3">
@@ -1296,11 +1254,10 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* composer — FIXED to the bottom of the screen like the header: it
-      {/* composer — bottom section of the chat flex column */}
+      {/* composer — FIXED to the bottom of the screen */}
       <div
         ref={composerRef}
-        className="relative z-30 shrink-0 bg-[#0b0b0b] px-3.5 pt-2"
+        className="fixed bottom-0 left-0 right-0 z-20 bg-[#0b0b0b] px-3.5 pt-2"
         style={{
           paddingBottom: kbFocused
             ? "6px"

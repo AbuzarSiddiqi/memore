@@ -86,23 +86,12 @@
   -webkit-touch-callout: default !important;
 }
 
-/* MEMORE Chat Window — fixed container with fixed header, independently
-   scrollable message list, and dynamic bottom composer aligned above keyboard. */
+/* MEMORE Chat Window */
 .chat-screen {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: var(--chat-bottom, 0px);
+  position: relative;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  overscroll-behavior: none;
-}
-
-body:has(.chat-screen) {
-  overflow: hidden !important;
-  overscroll-behavior: none !important;
+  overscroll-behavior-y: none;
 }
 
 /* Chat Screen Frame: lives INSIDE the chat root (absolute), so it follows the
