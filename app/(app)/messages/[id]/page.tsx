@@ -563,8 +563,9 @@ export default function ChatPage() {
   }, []);
 
   // Visual Viewport synchronization:
-  // Dynamically tracks keyboard height without shaking or layout thrashing.
-  // The header remains permanently locked at top: 0px.
+  // Dynamically tracks keyboard height and viewport offset smoothly.
+  // Setting el.style.top to vv.offsetTop keeps the header anchored directly
+  // at the top of the visible screen without jumping or disappearing off-screen.
   useEffect(() => {
     const el = screenRef.current;
     if (!el) return;
@@ -576,10 +577,12 @@ export default function ChatPage() {
         const vv = window.visualViewport;
         if (!vv) {
           el.style.height = "100dvh";
+          el.style.top = "0px";
           return;
         }
 
         el.style.height = `${vv.height}px`;
+        el.style.top = `${vv.offsetTop}px`;
 
         if (isNearBottomRef.current && listRef.current) {
           listRef.current.scrollTop = listRef.current.scrollHeight;
@@ -591,12 +594,12 @@ export default function ChatPage() {
 
     const vv = window.visualViewport;
     vv?.addEventListener("resize", syncViewport);
-    window.addEventListener("resize", syncViewport);
+    vv?.addEventListener("scroll", syncViewport);
 
     return () => {
       cancelAnimationFrame(rafId);
       vv?.removeEventListener("resize", syncViewport);
-      window.removeEventListener("resize", syncViewport);
+      vv?.removeEventListener("scroll", syncViewport);
     };
   }, []);
 
