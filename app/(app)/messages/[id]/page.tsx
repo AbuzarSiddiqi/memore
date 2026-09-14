@@ -52,9 +52,10 @@ function hashId(id: string): number {
 }
 
 /** Barely-there screen edge: one thin line that hugs the physical device corners.
- * Pure CSS — it never shifts or shrinks with the keyboard. */
+ * Lives INSIDE the chat root (absolute), so it follows the visual viewport with
+ * the rest of the chat and always wraps exactly the visible screen. */
 function ScreenFrame() {
-  return <div className="chat-screen-frame pointer-events-none fixed z-[68]" aria-hidden />;
+  return <div className="chat-screen-frame pointer-events-none absolute z-[68]" aria-hidden />;
 }
 
 /** One thin, slightly imperfect purple line under the header. */
@@ -394,14 +395,18 @@ export default function ChatPage() {
     };
   }, []);
 
-  // 2. Keyboard handling. The chat root is a fixed flex column anchored to the
-  // TOP of the layout viewport — the header never moves. The only thing JS
-  // drives is `--chat-bottom`: the keyboard's overlap with the layout viewport.
-  // With `interactiveWidget: resizes-content` (Android, iOS 16.4+/26) the
-  // layout viewport already shrinks by the keyboard, so innerHeight - vv.height
-  // is 0 and CSS does all the work; on older iOS the layout viewport stays
-  // full-height and the overlap is exactly the keyboard height. One formula,
-  // no translation, no root transform, no per-device hacks.
+  // 2. Keyboard handling. The root FOLLOWS THE VISUAL VIEWPORT. When the
+  // keyboard opens, iOS shrinks visualViewport.height AND pans the visual
+  // viewport up (vv.offsetTop) to reveal the focused input — and every
+  // position:fixed element rides that pan (the header sliding under the status
+  // bar, the composer stranded at the top). Anchoring the root to the panned,
+  // shrunk visual viewport — top = pageYOffset + vv.offsetTop, height =
+  // vv.height — cancels the pan VISUALLY: the header stays glued to the top of
+  // the screen, the message list shrinks, and the composer lands exactly on
+  // the keyboard edge with zero gap. Works identically on Safari, the iOS PWA,
+  // Android (where the layout viewport resizes instead) and desktop. No
+  // transforms, no scrollTo resets, no fighting the browser: whatever iOS
+  // does to the viewport, the root overlays exactly what the user can see.
   useEffect(() => {
     const el = screenRef.current;
     if (!el) return;
@@ -411,23 +416,22 @@ export default function ChatPage() {
 
     let rafId = 0;
     const syncViewport = () => {
-      // RAF-debounce: coalesce rapid visual-viewport events (keyboard animation
-      // on iOS fires many times per frame) into a single style update per frame.
+      // RAF-debounce: coalesce rapid visual-viewport events (the keyboard
+      // animation fires many per frame) into a single style update per frame.
       cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(() => {
         const vv = window.visualViewport;
         if (!vv) {
-          el.style.setProperty("--chat-bottom", "0px");
+          el.style.setProperty("--vv-top", "0px");
+          el.style.setProperty("--vv-h", "100%");
           return;
         }
 
-        // overlap = how much of the layout viewport the keyboard covers.
-        // On platforms where interactiveWidget:resizes-content works (Android,
-        // iOS 16.4+) innerHeight shrinks with the keyboard so this is always 0
-        // and CSS alone handles the layout. On older iOS innerHeight stays full
-        // so the overlap equals the keyboard height.
-        const overlap = Math.max(0, window.innerHeight - vv.height);
-        el.style.setProperty("--chat-bottom", `${overlap}px`);
+        // The visual viewport's top edge, in the layout coordinates that a
+        // position:fixed element is positioned in. iOS's keyboard pan
+        // (vv.offsetTop) and any window scroll are both absorbed here.
+        el.style.setProperty("--vv-top", `${(window.pageYOffset || 0) + vv.offsetTop}px`);
+        el.style.setProperty("--vv-h", `${vv.height}px`);
 
         // Track the tallest idle visual viewport height as the keyboard-closed
         // baseline — never let it decrease while an editable is focused.
@@ -439,12 +443,6 @@ export default function ChatPage() {
           "--chat-bottom-padding",
           keyboardOpen ? "0px" : "env(safe-area-inset-bottom, 0px)"
         );
-
-        // NOTE: We intentionally do NOT call window.scrollTo(0,0) here.
-        // The body is position:fixed so there is no real layout-viewport scroll.
-        // iOS animates the visualViewport (vv.offsetTop) when focusing an input;
-        // calling scrollTo() during that animation creates a feedback loop that
-        // causes the entire UI to bounce (the "fluctuation" bug on iPhone).
 
         // Keep newest messages visible only if user was already at the bottom
         if (isNearBottomRef.current && listRef.current) {
@@ -458,18 +456,21 @@ export default function ChatPage() {
     const vv = window.visualViewport;
     if (vv) {
       vv.addEventListener("resize", syncViewport);
-      // Do NOT listen to vv "scroll" — that fires when iOS pans the visual
-      // viewport to center a focused input. We don't need to react to it,
-      // and doing so was the second source of the fluctuation feedback loop.
+      vv.addEventListener("scroll", syncViewport); // iOS pans the visual viewport on focus
     }
     window.addEventListener("resize", syncViewport);
+    // Some iOS versions deliver the pan as a plain window scroll instead of a
+    // vv scroll event. Following it is harmless where nothing scrolled.
+    window.addEventListener("scroll", syncViewport, { passive: true });
 
     return () => {
       cancelAnimationFrame(rafId);
       if (vv) {
         vv.removeEventListener("resize", syncViewport);
+        vv.removeEventListener("scroll", syncViewport);
       }
       window.removeEventListener("resize", syncViewport);
+      window.removeEventListener("scroll", syncViewport);
     };
   }, []);
 
@@ -997,17 +998,15 @@ export default function ChatPage() {
 
   return (
     <>
-      <ScreenFrame />
       <div
         ref={screenRef}
         className="chat-screen font-display fixed inset-x-0 z-[65] bg-[#0b0b0b] text-white flex flex-col overflow-hidden"
         style={{
-          top: 0,
-          bottom: "var(--chat-bottom, 0px)",
           paddingTop: "max(12px, env(safe-area-inset-top, 24px))",
           overscrollBehavior: "none",
         }}
       >
+        <ScreenFrame />
         {clickShield && <div className="absolute inset-0 z-[80]" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} />}
 
       {/* header - stays fixed at top */}
@@ -1270,8 +1269,8 @@ export default function ChatPage() {
               enterKeyHint="send"
               onFocus={(e) => {
                 // Prevent iOS from scrolling/panning the page to center this
-                // input — our layout already keeps it above the keyboard via
-                // the --chat-bottom CSS variable updated in syncViewport.
+                // input — the root already tracks the visual viewport in
+                // syncViewport, so the composer is always above the keyboard.
                 e.target.scrollIntoView = () => {};
               }}
             />

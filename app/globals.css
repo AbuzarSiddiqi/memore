@@ -87,33 +87,32 @@
 }
 
 /* MEMORE Chat Keyboard & Viewport Architecture.
-   The root is anchored to the TOP of the layout viewport and never translates;
-   `--chat-bottom` (set in JS) is the keyboard's overlap with the layout
-   viewport — 0 on platforms where the keyboard already resizes the viewport.
-   NO transition on bottom: iOS fires vv.resize only after the keyboard fully
-   settles, so we must snap immediately to the final value. A CSS transition
-   would lag behind, creating a visible black gap between composer and keyboard. */
+   The root FOLLOWS THE VISUAL VIEWPORT: --vv-top / --vv-h (set in JS from
+   pageYOffset + vv.offsetTop and vv.height) place it exactly over the visible
+   screen. When iOS pans the visual viewport to reveal the focused input, the
+   root pans with it — so the pan cancels out visually and the header, messages
+   and composer never visibly move; the composer always sits on the keyboard
+   edge. NO transition on these values: updates must track iOS 1:1, a
+   transition would lag the keyboard and open a visible gap. */
 .chat-screen {
   position: fixed;
   left: 0;
   right: 0;
-  top: 0;
-  bottom: var(--chat-bottom, 0px);
+  top: var(--vv-top, 0px);
+  height: var(--vv-h, 100%);
   overscroll-behavior: none;
 }
 
-/* Chat Screen Frame: hugs the outer corners and reaches the usable bottom edge.
-   Sits just inside the safe-area-inset-bottom so it lines up with the composer.
+/* Chat Screen Frame: lives INSIDE the chat root (absolute), so it follows the
+   visual viewport with the chat and always wraps exactly the visible screen.
    The home-indicator clearance lives on the composer's safe-area padding
    INSIDE the frame — never on the frame itself. */
 .chat-screen-frame {
-  position: fixed;
+  position: absolute;
   left: 5px;
   right: 5px;
   top: max(8px, env(safe-area-inset-top, 16px));
-  /* Frame bottom: just above the home indicator on iPhone, or 5px on flat-bottom
-     devices. Matches the visual weight of the top offset. */
-  bottom: max(5px, env(safe-area-inset-bottom, 5px));
+  bottom: 5px;
   border: 1.5px solid rgba(124, 77, 255, 0.42);
   border-radius: 26px;
   pointer-events: none;
