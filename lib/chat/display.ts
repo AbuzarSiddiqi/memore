@@ -42,12 +42,19 @@ export function payloadFor(userId: string, m: Pick<ChatMessage, "id" | "sender_i
 
 /** Turn wire messages (content always "") into display messages: text filled
  * in, media keys stashed, reply quotes resolved within the batch. The input
- * array is left untouched; caching happens before this is called. */
+ * array is left untouched; caching happens before this is called.
+ *
+ * The SENDER's own messages are NOT decrypted — the peer envelope is
+ * undecryptable without the peer's ratchet state. Their content comes from
+ * the device-private local cache, where send() persisted it (the Signal-app
+ * model: your sent history lives on your device only). */
 export async function hydrateForDisplay(userId: string, messages: ChatMessageView[]): Promise<ChatMessageView[]> {
+  const canonUserId = userId;
   const payloads = new Map<string, MessagePayload | null>();
   await Promise.all(
     messages.map(async (m) => {
       if (!m.ciphertext) return;
+      if (m.sender_id === canonUserId) return; // own copy comes from the local cache
       const payload = await payloadFor(userId, m);
       payloads.set(m.id, payload);
       if (payload?.media) rememberMediaKey(m.id, payload.media);
@@ -55,6 +62,19 @@ export async function hydrateForDisplay(userId: string, messages: ChatMessageVie
   );
   return messages.map((m) => {
     if (!m.ciphertext) return m; // stickers carry no ciphertext
+    if (m.sender_id === canonUserId) {
+      // own message: trust the cached copy; a cache miss shows an empty
+      // bubble rather than a misleading "unable to decrypt" error.
+      // Own media keys ride along in the device-private cache.
+      if (m.media_key && m.media_iv) {
+        rememberMediaKey(m.id, {
+          key: m.media_key,
+          iv: m.media_iv,
+          mime: m.media_mime || (m.type === "video" ? "video/mp4" : "image/jpeg"),
+        });
+      }
+      return m;
+    }
     const payload = payloads.get(m.id) ?? null;
     let content = "";
     if (payload?.text != null) content = payload.text;

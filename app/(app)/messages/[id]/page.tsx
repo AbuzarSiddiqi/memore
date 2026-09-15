@@ -1428,7 +1428,10 @@ export default function ChatPage() {
         const sent: ChatMessageView = {
           ...res.message,
           // the wire response carries no plaintext — restore OUR local view
-          content: payload.content || (res.message.type === "text" ? "" : res.message.content),
+          content: payload.content ?? "",
+          media_key: payload.media?.key ?? null,
+          media_iv: payload.media?.iv ?? null,
+          media_mime: payload.media?.mime ?? null,
           reply_to: optimisticMsg.reply_to,
         };
         setDetail((prev) => {
@@ -1438,9 +1441,10 @@ export default function ChatPage() {
             messages: prev.messages.map((m) => (m.id === optId ? sent : m)),
           };
         });
-        const updated = await appendCachedMessages(id, [res.message]); // ciphertext in the cache
+        // persist the SENDER'S copy (content intact) in the device-private
+        // cache — it can never be re-derived from the peer envelope
+        await appendCachedMessages(id, [sent]);
         lastSyncCursorRef.current = res.message.created_at;
-        void updated;
       }
       await load();
     } catch (e) {

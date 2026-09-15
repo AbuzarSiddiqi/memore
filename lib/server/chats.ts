@@ -257,10 +257,16 @@ export async function getOrCreateConversation(user: Profile, otherUsername: stri
     a.from("conversations").insert({ id: `c_${crypto.randomUUID()}`, created_at: nowIso, updated_at: nowIso, temp_chat: false }).select("id,created_at,updated_at,temp_chat").single()
   );
   if (!conv) return { error: "Couldn't start the chat. Try again." };
-  await a.from("conversation_participants").insert([
+  const { error: partErr } = await a.from("conversation_participants").insert([
     { conversation_id: conv.id, user_id: user.id, last_read_at: nowIso, muted: false },
     { conversation_id: conv.id, user_id: other.id, last_read_at: "1970-01-01T00:00:00Z", muted: false },
   ]);
+  if (partErr) {
+    // never report success with an orphaned conversation — surface it
+    console.warn("participant insert failed:", partErr.message);
+    await a.from("conversations").delete().eq("id", conv.id);
+    return { error: "Couldn't start the chat. Try again." };
+  }
   return { conversation: conv, other };
 }
 

@@ -88,6 +88,12 @@ create table if not exists chat_devices (
 );
 create index if not exists idx_chat_devices_user on chat_devices(user_id, created_at desc);
 
+-- NOTE: chat tables intentionally have NO foreign keys into profiles(id).
+-- MEMORE's user universe is the app's own store; profiles only mirrors
+-- Supabase-Auth signups. Run database/migration_v6b_chat_fk_fix.sql if the
+-- constraints were created before this note (they made conversation creation
+-- fail for users missing from profiles).
+
 -- ============================================================
 -- Row Level Security — defense in depth. The Next.js server talks to
 -- these tables with the service-role key and re-checks conversation

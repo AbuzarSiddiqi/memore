@@ -106,6 +106,9 @@ export class IndexedDbProtocolStore implements StorageType {
 
   async isTrustedIdentity(identifier: string, identityKey: ArrayBuffer, _direction: Direction): Promise<boolean> {
     void _direction;
+    // The protocol passes the peer's NAME here and the full
+    // `<name>.<deviceId>` address to saveIdentity — key both by NAME so the
+    // pin actually holds across session rebuilds.
     const saved = await this.kvGet<ArrayBuffer>("identities", identifier);
     // Trust on first use, then pin: a changed identity key for the same
     // address is refused (a rotating key would enable a MITM re-registration).
@@ -113,8 +116,17 @@ export class IndexedDbProtocolStore implements StorageType {
     return b64(saved) === b64(identityKey);
   }
   async saveIdentity(encodedAddress: string, publicKey: ArrayBuffer): Promise<boolean> {
-    await this.kvPut("identities", encodedAddress, publicKey);
+    // store under the NAME half of `<peer>.<device>` — see isTrustedIdentity
+    const name = encodedAddress.split(".")[0] || encodedAddress;
+    await this.kvPut("identities", name, publicKey);
     return true;
+  }
+  /** Migration shim: forget a pinned identity so a device that legitimately
+   * regenerated (e.g. the one-time UUID→numeric device-id migration) can
+   * re-establish sessions instead of deadlocking on "Identity key changed". */
+  async removeIdentity(name: string): Promise<void> {
+    const store = await this.tx("identities", "readwrite");
+    store.delete(name);
   }
 
   // ---------- sessions (serialized Double Ratchet state) ----------
@@ -165,5 +177,21 @@ export class IndexedDbProtocolStore implements StorageType {
       const req = indexedDB.deleteDatabase(db.name);
       req.onsuccess = req.onerror = req.onblocked = () => resolve();
     });
+  }
+
+  /** Clear every store but keep the database handle (device-identity reset). */
+  async wipeAll(): Promise<void> {
+    const db = await this.db;
+    await Promise.all(
+      [...db.objectStoreNames].map(
+        (name) =>
+          new Promise<void>((resolve) => {
+            const tx = db.transaction(name, "readwrite");
+            tx.objectStore(name).clear();
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => resolve();
+          })
+      )
+    );
   }
 }

@@ -361,7 +361,15 @@ export async function appendCachedMessages(conversationId: string, newMessages: 
   const byId = new Map<string, any>(current.map((m) => [m.id, m]));
 
   for (const m of newMessages) {
-    byId.set(m.id, m);
+    const existing = byId.get(m.id);
+    if (existing && !m.content && existing.content) {
+      // E2EE: server responses carry content:"" — never let them wipe the
+      // locally-cached sender copy of your own sent message (still refresh
+      // everything else: seen flags, reactions, expiry).
+      byId.set(m.id, { ...m, content: existing.content });
+    } else {
+      byId.set(m.id, m);
+    }
   }
 
   const merged = Array.from(byId.values()).filter((m: any) => !isExpired(m)).sort((a: any, b: any) => a.created_at.localeCompare(b.created_at));
@@ -370,16 +378,20 @@ export async function appendCachedMessages(conversationId: string, newMessages: 
   const db = await openClientDb();
   if (db) {
     try {
+      const mergedById = new Map(merged.map((m: any) => [m.id, m]));
       const tx = db.transaction("messages", "readwrite");
       const store = tx.objectStore("messages");
       for (const m of newMessages) {
+        // persist the MERGED version — the raw incoming row would clobber the
+        // locally-cached sender copy (own messages keep their content)
+        const row = mergedById.get(m.id) ?? m;
         // each message carries its OWN expires_at (server-stamped)
         store.put({
-          id: m.id,
+          id: row.id,
           conversation_id: conversationId,
-          data: m,
-          created_at: m.created_at,
-          expires_at: m.expires_at ?? null,
+          data: row,
+          created_at: row.created_at,
+          expires_at: row.expires_at ?? null,
         });
       }
     } catch (err) {

@@ -366,6 +366,12 @@ export interface ChatMessageView extends ChatMessage {
   seen: boolean; // other participant's read timestamp >= created_at
   reactions: MessageReactionSummary[]; // aggregated, catalog-ordered
   reply_to: ChatReplyRef | null; // hydrated quote target
+  // client-only, sender's own copy: media key kept in the DEVICE-PRIVATE
+  // cache so you can re-view your own encrypted media after a refresh
+  // (never sent to the server, never present on the recipient's copy)
+  media_key?: string | null;
+  media_iv?: string | null;
+  media_mime?: string | null;
 }
 
 export interface ChatDetail {

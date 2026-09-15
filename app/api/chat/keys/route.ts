@@ -36,10 +36,28 @@ export async function GET(req: NextRequest) {
       const devices = await many<{ device_id: string; registration_id: number }>(
         admin.from("chat_devices").select("device_id,registration_id").eq("user_id", user.id)
       );
-      return ok({ devices });
+      // Self-bundle (public material only) so a device can run X3DH against
+      // ITSELF — the self-copy is how the sender re-reads their own sent
+      // messages after a refresh.
+      const device = await one<Record<string, unknown>>(
+        admin.from("chat_devices").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(1).maybeSingle()
+      );
+      return ok({
+        devices,
+        device: device
+          ? {
+              device_id: device.device_id,
+              registration_id: device.registration_id,
+              identity_key: device.identity_key,
+              signed_prekey_id: device.signed_prekey_id,
+              signed_prekey_public: device.signed_prekey_public,
+              signed_prekey_signature: device.signed_prekey_signature,
+            }
+          : null,
+      });
     }
     const device = await one<Record<string, unknown>>(
-      admin.from("chat_devices").select("*").eq("user_id", peerId).limit(1).maybeSingle()
+      admin.from("chat_devices").select("*").eq("user_id", peerId).order("created_at", { ascending: false }).limit(1).maybeSingle()
     );
     if (!device) return ok({ device: null });
     return ok({

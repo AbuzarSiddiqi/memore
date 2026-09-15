@@ -77,10 +77,18 @@ class Engine {
     setWebCrypto(window.crypto);
 
     let identity = await this.store.loadIdentity();
+    if (identity && !/^\d+$/.test(identity.deviceId)) {
+      // One-time migration: the first rollout generated UUID device ids, but
+      // Signal session addresses are `<name>.<numericDeviceId>` — those
+      // devices could never be addressed consistently. Reset the whole
+      // identity and start clean.
+      await this.store.wipeAll();
+      identity = null;
+    }
     if (!identity) {
       const keyPair = await KeyHelper.generateIdentityKeyPair();
       const registrationId = KeyHelper.generateRegistrationId();
-      const deviceId = crypto.randomUUID();
+      const deviceId = String(KeyHelper.generateRegistrationId());
       await this.store.persistIdentity(keyPair, registrationId, deviceId);
       identity = { keyPair, registrationId, deviceId };
     }
@@ -118,7 +126,9 @@ class Engine {
   }
 
   private addressFor(peerId: string, deviceId: string): SignalProtocolAddress {
-    return new SignalProtocolAddress(peerId, Number.isFinite(Number(deviceId)) && deviceId !== "" ? Number(deviceId) : 1);
+    // device ids are numeric strings (they become part of the session address)
+    const numeric = /^\d+$/.test(deviceId) ? Number(deviceId) : 1;
+    return new SignalProtocolAddress(peerId, numeric);
   }
 
   /** Find any stored session with this peer that is open, preferring the last
@@ -139,8 +149,22 @@ class Engine {
     return null;
   }
 
-  /** Establish a session from the peer's PUBLIC bundle (X3DH as initiator). */
+  /** Establish a session from the peer's PUBLIC bundle (X3DH as initiator).
+   * If the peer's device legitimately regenerated its identity since we
+   * pinned it (device migration), re-pin once instead of deadlocking. */
   private async establishSession(peerId: string): Promise<string> {
+    try {
+      return await this.establishSessionInner(peerId);
+    } catch (err) {
+      if (String((err as Error)?.message ?? "").includes("Identity key changed")) {
+        await this.store.removeIdentity(peerId);
+        return await this.establishSessionInner(peerId);
+      }
+      throw err;
+    }
+  }
+
+  private async establishSessionInner(peerId: string): Promise<string> {
     const res = await fetch(`/api/chat/keys?user=${encodeURIComponent(peerId)}`);
     if (!res.ok) throw new Error("Couldn't fetch their encryption keys.");
     const data = await res.json();
@@ -162,13 +186,19 @@ class Engine {
     return address.toString();
   }
 
-  /** Encrypt one payload for a peer. Throws on any failure — NEVER falls back
-   * to plaintext (the caller shows a clean error instead of sending). */
+  /** Encrypt one payload for a peer. Throws on any failure — NEVER falls
+   * back to plaintext. The sender's own copy is kept in the device-private
+   * local cache (the Signal-app model: your sent history lives on your
+   * device; the peer envelope is undecryptable without the peer's state). */
   async encrypt(peerId: string, payload: MessagePayload): Promise<Envelope> {
+    return await this.encryptTo(peerId, payload);
+  }
+
+  private async encryptTo(recipientId: string, payload: MessagePayload): Promise<Envelope> {
     await this.ready();
-    const open = await this.openSessionAddress(peerId);
-    if (!open) await this.establishSession(peerId);
-    const cipher = new SessionCipher(this.store, this.addressFor(peerId, this.peerDevice.get(peerId) ?? "1"));
+    const open = await this.openSessionAddress(recipientId);
+    if (!open) await this.establishSession(recipientId);
+    const cipher = new SessionCipher(this.store, this.addressFor(recipientId, this.peerDevice.get(recipientId) ?? "1"));
     const bytes = new TextEncoder().encode(JSON.stringify(payload)).buffer as ArrayBuffer;
     const msg: MessageType = await cipher.encrypt(bytes);
     if (msg.body == null) throw new Error("Encryption produced no output.");
@@ -194,8 +224,20 @@ class Engine {
   }
 
   private async decryptBytes(senderId: string, envelope: Envelope): Promise<ArrayBuffer | null> {
-    // the library expects its own binary-string encoding back
-    const body = b64ToBinaryString(envelope.body);
+    // Legacy/foreign formats (a JSON container from the brief self-envelope
+    // experiment) fall back to their peer part; a bare base64 body passes
+    // straight through.
+    let raw = envelope.body;
+    if (raw.startsWith("{") && raw.includes('"peer"')) {
+      try {
+        const container = JSON.parse(raw) as { peer?: [number, string] };
+        if (!container.peer?.[1]) return null;
+        raw = container.peer[1];
+      } catch {
+        return null;
+      }
+    }
+    const body = b64ToBinaryString(raw);
     // Candidate sessions: the last device we used, then every stored session
     // for this sender, then the default slot. First success wins.
     const preferred = this.peerDevice.get(senderId);
@@ -214,8 +256,8 @@ class Engine {
     push("1");
 
     for (const cipher of attempts) {
-      // The wire doesn't record the envelope type (the sender emits prekey
-      // envelopes until it gets a reply) — try both, first success wins.
+      // The container doesn't record the envelope type (the sender emits
+      // prekey envelopes until it gets a reply) — try both, first wins.
       for (const type of [3, 1]) {
         try {
           const bytes =
