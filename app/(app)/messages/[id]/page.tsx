@@ -410,6 +410,17 @@ export default function ChatPage() {
   const alive = useRef(true);
   const lastSyncCursorRef = useRef<string>("");
 
+  // ── Swipe-back gesture state (Instagram-style edge swipe to go back) ──
+  const edgeSwipeRef = useRef<{
+    startX: number;
+    startY: number;
+    dx: number;
+    locked: "none" | "horizontal" | "vertical";
+    velocityHistory: Array<{ x: number; t: number }>;
+    pointerId: number;
+  } | null>(null);
+  const [screenDx, setScreenDx] = useState(0); // realtime swipe offset for the whole chat screen
+
   // 1. Instant Cache-First Hydration on mount (Frame 0 rendering)
   useEffect(() => {
     let active = true;
@@ -565,13 +576,187 @@ export default function ChatPage() {
     }
   }, []);
 
-  // Animated close: play the leave transition, THEN swap routes, so leaving the
-  // chat feels like the window settling back down instead of a hard cut.
+  // Animated close: play the horizontal slide-out, THEN swap routes.
   const goBack = useCallback(() => {
     if (leaving) return;
     setLeaving(true);
-    window.setTimeout(() => router.push("/messages"), 190);
+    window.setTimeout(() => router.push("/messages"), 280);
   }, [leaving, router]);
+
+  // ── Interactive swipe-back gesture ──
+  // Activates from the left ~24px edge of the chat screen. Uses direction-locking
+  // so vertical scrolls and per-message swipe-to-reply gestures are never hijacked.
+  // Velocity detection allows fast flicks to dismiss even below the distance threshold.
+  useEffect(() => {
+    const el = screenRef.current;
+    if (!el) return;
+
+    const EDGE_ZONE = 24;       // px from left edge to start listening
+    const THRESHOLD_RATIO = 0.3; // 30% of viewport width
+    const THRESHOLD_MIN = 80;    // minimum px threshold
+    const THRESHOLD_MAX = 120;   // maximum px threshold
+    const VELOCITY_DISMISS = 800; // px/s — fast flick overrides distance
+    const LOCK_DISTANCE = 10;    // px of movement before direction-lock decision
+
+    const getThreshold = () => Math.min(THRESHOLD_MAX, Math.max(THRESHOLD_MIN, window.innerWidth * THRESHOLD_RATIO));
+
+    const onDown = (e: PointerEvent) => {
+      // Only activate from the left edge zone, and only for primary pointer
+      if (e.button !== 0) return;
+      const rect = el.getBoundingClientRect();
+      const localX = e.clientX - rect.left;
+      if (localX > EDGE_ZONE) return;
+      // Don't interfere with interactive elements
+      if ((e.target as HTMLElement).closest("button, a, input, textarea, video, [data-react], .react-tray")) return;
+
+      edgeSwipeRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        dx: 0,
+        locked: "none",
+        velocityHistory: [{ x: e.clientX, t: e.timeStamp }],
+        pointerId: e.pointerId,
+      };
+    };
+
+    const onMove = (e: PointerEvent) => {
+      const g = edgeSwipeRef.current;
+      if (!g || e.pointerId !== g.pointerId) return;
+
+      const dx = e.clientX - g.startX;
+      const dy = e.clientY - g.startY;
+
+      // Direction-lock decision
+      if (g.locked === "none") {
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < LOCK_DISTANCE) return;
+        if (Math.abs(dy) > Math.abs(dx)) {
+          // Vertical — cancel edge swipe, let scroll handle it
+          g.locked = "vertical";
+          edgeSwipeRef.current = null;
+          setScreenDx(0);
+          return;
+        }
+        if (dx < 0) {
+          // Swiping left — not a back gesture
+          edgeSwipeRef.current = null;
+          setScreenDx(0);
+          return;
+        }
+        g.locked = "horizontal";
+        // Prevent vertical scroll from competing
+        e.preventDefault();
+      }
+
+      if (g.locked !== "horizontal") return;
+      e.preventDefault();
+
+      // Track movement (clamped to 0..viewport width)
+      g.dx = Math.max(0, dx);
+
+      // Velocity tracking (keep last 5 samples)
+      g.velocityHistory.push({ x: e.clientX, t: e.timeStamp });
+      if (g.velocityHistory.length > 5) g.velocityHistory.shift();
+
+      // Update the screen position in realtime
+      setScreenDx(g.dx);
+    };
+
+    const onUp = (e: PointerEvent) => {
+      const g = edgeSwipeRef.current;
+      if (!g || e.pointerId !== g.pointerId) return;
+      edgeSwipeRef.current = null;
+
+      if (g.locked !== "horizontal" || g.dx < 5) {
+        setScreenDx(0);
+        return;
+      }
+
+      // Compute velocity from the last few samples
+      const hist = g.velocityHistory;
+      let velocity = 0;
+      if (hist.length >= 2) {
+        const first = hist[0];
+        const last = hist[hist.length - 1];
+        const dt = (last.t - first.t) / 1000; // seconds
+        if (dt > 0) velocity = (last.x - first.x) / dt; // px/s
+      }
+
+      const threshold = getThreshold();
+      const shouldDismiss = g.dx >= threshold || velocity > VELOCITY_DISMISS;
+
+      if (shouldDismiss) {
+        // Animate from current finger position → fully off-screen.
+        // DO NOT call setScreenDx(0) here — a React re-render would
+        // wipe the inline transform and snap the chat back to x=0
+        // before the CSS transition can play.  The component will
+        // unmount when router.push fires, so no cleanup needed.
+        const el2 = screenRef.current;
+        if (el2) {
+          el2.style.transition = "transform 0.22s cubic-bezier(0.32, 0.72, 0, 1)";
+          el2.style.transform = "translate3d(100%, 0, 0)";
+        }
+        window.setTimeout(() => {
+          router.push("/messages");
+        }, 220);
+      } else {
+        // Spring back from current finger position → origin.
+        // Defer setScreenDx(0) until transitionend so React doesn't
+        // fight the CSS transition mid-flight.
+        const el2 = screenRef.current;
+        if (el2) {
+          el2.style.transition = "transform 0.28s cubic-bezier(0.32, 0.72, 0, 1)";
+          el2.style.transform = "translate3d(0, 0, 0)";
+          const cleanup = () => {
+            el2.style.transition = "";
+            el2.style.transform = "";
+            el2.style.animation = "";
+            setScreenDx(0);
+            el2.removeEventListener("transitionend", cleanup);
+          };
+          el2.addEventListener("transitionend", cleanup);
+        } else {
+          setScreenDx(0);
+        }
+      }
+    };
+
+    const onCancel = (e: PointerEvent) => {
+      const g = edgeSwipeRef.current;
+      if (!g || e.pointerId !== g.pointerId) return;
+      edgeSwipeRef.current = null;
+      // Spring back — defer state reset to after transition
+      const el2 = screenRef.current;
+      if (el2) {
+        el2.style.transition = "transform 0.28s cubic-bezier(0.32, 0.72, 0, 1)";
+        el2.style.transform = "translate3d(0, 0, 0)";
+        const cleanup = () => {
+          el2.style.transition = "";
+          el2.style.transform = "";
+          el2.style.animation = "";
+          setScreenDx(0);
+          el2.removeEventListener("transitionend", cleanup);
+        };
+        el2.addEventListener("transitionend", cleanup);
+      } else {
+        setScreenDx(0);
+      }
+    };
+
+    // Use capture phase on pointerdown to catch it before message gesture handlers
+    el.addEventListener("pointerdown", onDown, { capture: false });
+    // Move/up on window so we track even if pointer leaves the element
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+
+    return () => {
+      el.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+    };
+  }, [router]);
 
   // Dynamic font sizing with hysteresis:
   // NORMAL: 16px (compact / 1-2 lines)
@@ -1252,6 +1437,8 @@ export default function ChatPage() {
         style={{
           top: "0px",
           height: "100dvh",
+          willChange: screenDx > 0 ? "transform" : undefined,
+          ...(screenDx > 0 ? { transform: `translate3d(${screenDx}px, 0, 0)`, transition: "none", animation: "none" } : {}),
         }}
       >
         {clickShield && <div className="absolute inset-0 z-[80]" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()} />}
