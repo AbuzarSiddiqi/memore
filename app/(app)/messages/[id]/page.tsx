@@ -87,41 +87,107 @@ function HeaderClock({ tempChat }: { tempChat: boolean }) {
   );
 }
 
-/** Wobbly ink bubble — scales seamlessly to ANY height without clipping text.
- * Mine is lime with dark charcoal ink stroke, theirs is dark charcoal with purple stroke.
- * Tail flick is anchored precisely at the bottom corner. */
-function BubbleFrame({ mine, tail }: { mine: boolean; tail: boolean }) {
-  const bg = mine ? "bg-[#C8FF3D]" : "bg-[#161616]";
-  const border = mine ? "border-[rgba(10,10,10,0.72)]" : "border-[#7C4DFF]";
-  // Asymmetric hand-drawn radii:
-  const radii = mine
-    ? tail
-      ? "rounded-[19px_17px_4px_18px/17px_19px_18px_4px]"
-      : "rounded-[19px_17px_18px_18px/17px_19px_18px_17px]"
-    : tail
-      ? "rounded-[17px_19px_18px_4px/19px_17px_4px_18px]"
-      : "rounded-[17px_19px_18px_17px/19px_17px_17px_18px]";
-
+/** Wobbly comic ink bubble. The ENTIRE silhouette — body, wobble, and tail —
+ * is ONE continuous hand-drawn path drawn in measured pixel space, so the tail
+ * is always connected to the bubble (never a glued-on triangle) and the paint
+ * covers the full box (tall messages never crop). The first bubble of a run
+ * gets a curled flick tail; ~1/3 of the others get a sharp comic dialog-box
+ * corner, both seeded from the message id so shapes feel randomly sketched.
+ * Mine is lime with charcoal ink, theirs is charcoal with purple ink. */
+function BubbleFrame({ mine, tail, beak = false, seed = 0 }: { mine: boolean; tail: boolean; beak?: boolean; seed?: number }) {
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) {
+        const { width, height } = e.contentRect;
+        if (width > 0 && height > 0) setSize({ w: Math.round(width), h: Math.round(height) });
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const kind = tail ? "flick" : beak ? "beak" : "none";
+  const d = size.w > 0 && size.h > 0 ? bubbleOutline(size.w, size.h, seed, kind, mine) : "";
+  const fill = mine ? "#C8FF3D" : "#161616";
+  const ink = mine ? "rgba(10,10,10,0.72)" : "#7C4DFF";
   return (
-    <div
-      className={`pointer-events-none absolute inset-0 ${bg} ${border} ${radii} border-[1.7px]`}
-      aria-hidden
-    >
-      {tail && (
-        <svg
-          viewBox="0 0 12 12"
-          className={`absolute -bottom-[5px] h-3 w-3 ${mine ? "-right-[4px]" : "-left-[4px]"}`}
-          aria-hidden
-        >
-          {mine ? (
-            <path d="M2 2 C 5 7, 8 9, 11 11 C 9 7, 7 4, 6 2 Z" fill="#C8FF3D" stroke="rgba(10,10,10,0.72)" strokeWidth="1.7" strokeLinejoin="round" />
-          ) : (
-            <path d="M10 2 C 7 7, 4 9, 1 11 C 3 7, 5 4, 6 2 Z" fill="#161616" stroke="#7C4DFF" strokeWidth="1.7" strokeLinejoin="round" />
-          )}
+    <span ref={ref} className="pointer-events-none absolute -inset-2.5 block" aria-hidden>
+      {d && (
+        <svg width={size.w} height={size.h} viewBox={`0 0 ${size.w} ${size.h}`} className="absolute left-0 top-0 overflow-visible">
+          <path d={d} fill={fill} stroke={ink} strokeWidth="1.7" strokeLinejoin="round" strokeLinecap="round" />
         </svg>
       )}
-    </div>
+    </span>
   );
+}
+
+/** One continuous hand-drawn bubble outline in pixel space. (0,0) is 10px
+ * outside the text box on every side, leaving room for the ink and the tail
+ * tip. Clockwise: top → right → bottom → left, each edge a slightly wavy
+ * cubic; the sender's bottom corner is replaced by the tail. */
+function bubbleOutline(w: number, h: number, seed: number, kind: "none" | "flick" | "beak", mine: boolean): string {
+  const m = 10;
+  const x0 = m, y0 = m;
+  const x1 = Math.max(w - m, x0 + 40);
+  const y1 = Math.max(h - m, y0 + 26);
+  const r = Math.min(17, Math.max(11, (y1 - y0) / 3.2));
+  // deterministic ±v px jitter from the message seed
+  const j = (i: number, v: number) => ((((seed >> (i * 2)) & 3) / 3) - 0.5) * 2 * v;
+  const wT = j(1, 1.3), wR = j(2, 1.3), wB = j(3, 1.3), wL = j(4, 1.3);
+  const tail = kind !== "none";
+  const onRight = mine;              // mine → tail at bottom-right, theirs → bottom-left
+  const sharp = kind === "beak";     // sharp dialog point vs curled flick
+  const F = (n: number) => n.toFixed(1);
+  const tipY = y1 + 6.2;
+  const ey = y1 - (sharp ? 9 : 13);  // where the straight edge hands off to the tail
+
+  let d = `M ${F(x0 + r + j(5, 1.5))} ${F(y0 + j(6, 1))}`;
+  // top edge + top-right corner
+  d += ` C ${F(x0 + (x1 - x0) * 0.3)} ${F(y0 + wT)}, ${F(x0 + (x1 - x0) * 0.72)} ${F(y0 - wT)}, ${F(x1 - r + j(7, 1.5))} ${F(y0 + j(8, 0.6))}`;
+  d += ` C ${F(x1 - r * 0.35)} ${F(y0)}, ${F(x1 + wR)} ${F(y0 + r * 0.35)}, ${F(x1 + wR)} ${F(y0 + r)}`;
+
+  if (tail && onRight) {
+    // right edge stops above the corner, sweeps out to the tip, returns to the bottom edge
+    d += ` C ${F(x1 + wR)} ${F(y0 + (y1 - y0) * 0.48)}, ${F(x1 + wR * 0.5)} ${F(y1 - r * 1.35)}, ${F(x1 + j(9, 1))} ${F(ey)}`;
+    d += sharp
+      ? ` C ${F(x1 + 2.5)} ${F(ey + 4.5)}, ${F(x1 + 6)} ${F(y1 + 0.5)}, ${F(x1 + 6)} ${F(tipY)}`
+      : ` C ${F(x1 + 2)} ${F(ey + 5)}, ${F(x1 + 7.6)} ${F(y1 - 1)}, ${F(x1 + 6.4)} ${F(tipY)}`;
+    d += sharp
+      ? ` C ${F(x1 + 2.2)} ${F(y1 + 3)}, ${F(x1 - 4)} ${F(y1 + 1.8)}, ${F(x1 - 13)} ${F(y1 + wB)}`
+      : ` C ${F(x1 + 0.8)} ${F(y1 + 2.6)}, ${F(x1 - 6)} ${F(y1 + 1.6)}, ${F(x1 - 15)} ${F(y1 + wB)}`;
+    d += ` C ${F(x0 + (x1 - x0) * 0.62)} ${F(y1 + wB)}, ${F(x0 + (x1 - x0) * 0.34)} ${F(y1 - wB)}, ${F(x0 + r + j(10, 1.5))} ${F(y1 + j(11, 1))}`;
+  } else {
+    // right edge + bottom-right corner
+    d += ` C ${F(x1 + wR)} ${F(y0 + (y1 - y0) * 0.48)}, ${F(x1 + wR * 0.6)} ${F(y1 - r)}, ${F(x1 - r * 0.35 + j(9, 1.5))} ${F(y1 + j(10, 1))}`;
+    if (tail) {
+      // bottom edge stops short of the bottom-left corner — the tail lives
+      // there, an exact mirror of the sent flick: bottom edge → tip → left edge
+      d += ` C ${F(x0 + (x1 - x0) * 0.68)} ${F(y1 + wB)}, ${F(x0 + 24)} ${F(y1 - wB)}, ${F(x0 + 15)} ${F(y1 + wB)}`;
+      d += sharp
+        ? ` C ${F(x0 + 4)} ${F(y1 + 1.8)}, ${F(x0 - 2.2)} ${F(y1 + 3)}, ${F(x0 - 6)} ${F(tipY)}`
+        : ` C ${F(x0 + 6)} ${F(y1 + 1.6)}, ${F(x0 - 0.8)} ${F(y1 + 2.6)}, ${F(x0 - 6.4)} ${F(tipY)}`;
+      d += sharp
+        ? ` C ${F(x0 - 6)} ${F(y1 + 0.5)}, ${F(x0 - 2.5)} ${F(y1 - 4.5)}, ${F(x0 + wL + j(12, 1))} ${F(ey)}`
+        : ` C ${F(x0 - 7.6)} ${F(y1 - 1)}, ${F(x0 - 2)} ${F(y1 - 8)}, ${F(x0 + wL + j(12, 1))} ${F(ey)}`;
+    } else {
+      d += ` C ${F(x0 + (x1 - x0) * 0.66)} ${F(y1 + wB)}, ${F(x0 + (x1 - x0) * 0.32)} ${F(y1 - wB)}, ${F(x0 + r + j(10, 1.5))} ${F(y1 + j(11, 1))}`;
+    }
+  }
+
+  if (tail && !onRight) {
+    // left edge starts where the tail handed back
+    d += ` C ${F(x0 + wL)} ${F(y1 - (sharp ? 5.5 : 8.5))}, ${F(x0 + wL)} ${F(y0 + (y1 - y0) * 0.52)}, ${F(x0 + j(12, 1.5))} ${F(y0 + r)}`;
+  } else {
+    // bottom-left corner + left edge
+    d += ` C ${F(x0 + j(11, 0.5))} ${F(y1)}, ${F(x0 + wL)} ${F(y1 - r * 0.4)}, ${F(x0 + wL)} ${F(y1 - r)}`;
+    d += ` C ${F(x0 + wL)} ${F(y0 + (y1 - y0) * 0.52)}, ${F(x0 + wL * 0.5)} ${F(y0 + r * 0.8)}, ${F(x0 + j(12, 1.5))} ${F(y0 + r)}`;
+  }
+  // top-left corner, close
+  d += ` C ${F(x0 + wL * 0.4)} ${F(y0 + r * 0.2)}, ${F(x0 + r * 0.4)} ${F(y0)}, ${F(x0 + r + j(5, 1.5))} ${F(y0 + j(6, 1))} Z`;
+  return d;
 }
 
 /** Dynamic hand-drawn purple doodle border for the composer input wrapper.
@@ -172,49 +238,89 @@ function WobblyCircle({ fill, stroke }: { fill: string; stroke: string }) {
   );
 }
 
-/** Tiny marker accents sitting JUST OUTSIDE a bubble — sparse, asymmetric,
- * never over the text. Variant is picked from the message id so the 3s poll
- * never makes a stroke jump. Incoming hugs the left ink (purple), outgoing
- * the right (lime). */
+/** Marker doodles in the reserved outer lane — every bubble is shifted 10px
+ * inward from its outer side (sent → right, received → left), and the marks
+ * center in that lane: ~4-6px clear of the wobble ink, never touching the
+ * avatar (received) or the screen edge (sent), and always inside the bubble's
+ * own vertical band. Tail/beak bubbles get one quiet mid-height mark so
+ * nothing fights the tail or the avatar; others get one of six random strokes
+ * at a random height, about half with a second tiny cross-ink slash. */
 function BubbleAccents({ mine, seed, tail }: { mine: boolean; seed: number; tail: boolean }) {
-  const ink = mine ? "rgba(200,255,61,0.8)" : "rgba(150,112,255,0.8)";
-  const cross = mine ? "rgba(150,112,255,0.7)" : "rgba(200,255,61,0.6)";
-  let v = seed % 4;
-  // bottom-edge accents would collide with a bubble tail — swap for top ones
-  if (tail && (v === 1 || v === 3)) v = seed % 2 === 0 ? 0 : 2;
-  const side = mine ? { right: "-10px" } : { left: "-10px" };
-  const sideFar = mine ? { right: "-12px" } : { left: "-12px" };
+  const ink = mine ? "rgba(200,255,61,0.85)" : "rgba(150,112,255,0.9)";
+  const alt = mine ? "rgba(150,112,255,0.75)" : "rgba(200,255,61,0.7)";
+  // Anchor by the mark's own width: its INNER edge lands 5px clear of the
+  // box edge, so no stroke ever crosses the ink line (which bulges ~2.4px out).
+  const out = (w: number) => (mine ? { right: -(w + 5) } : { left: -(w + 5) }) as React.CSSProperties;
+
+  if (tail) {
+    // the tail already decorates the bottom corner — one quiet mark mid-height
+    const t = seed % 3;
+    return (
+      <>
+        {t === 0 && (
+          <svg viewBox="0 0 10 13" className="pointer-events-none absolute -rotate-6 h-[13px] w-[10px]" style={{ top: "55%", ...out(10) }} aria-hidden>
+            <path d="M2.5 10.5 L6.5 2.5 M5.5 11.5 L9 4.5" stroke={ink} strokeWidth="1.9" strokeLinecap="round" fill="none" />
+          </svg>
+        )}
+        {t === 1 && (
+          <svg viewBox="0 0 11 11" className="pointer-events-none absolute rotate-12 h-[11px] w-[11px]" style={{ top: "48%", ...out(11) }} aria-hidden>
+            <path d="M5.5 1 L5.5 10 M1 5.5 L10 5.5" stroke={ink} strokeWidth="1.9" strokeLinecap="round" fill="none" />
+          </svg>
+        )}
+        {t === 2 && (
+          <svg viewBox="0 0 10 13" className="pointer-events-none absolute h-[13px] w-[10px]" style={{ top: "52%", ...out(10) }} aria-hidden>
+            <path d="M8.5 2.5 C 4 1, 1.8 5, 4 8 C 5.8 10.4, 9 8.6, 8.2 6.2 C 7.7 4.6, 5.6 4.7, 5.3 6.2" stroke={ink} strokeWidth="1.8" strokeLinecap="round" fill="none" />
+          </svg>
+        )}
+      </>
+    );
+  }
+
+  const v = seed % 6;
+  const companion = seed % 2 === 0;
   return (
     <>
       {v === 0 && (
-        // two short parallel slashes at an upper corner
-        <svg viewBox="0 0 24 24" className="pointer-events-none absolute -top-2 h-[18px] w-[18px] -rotate-3" style={sideFar} aria-hidden>
-          <path d="M6 16 L13 5 M11 18 L18 8" stroke={ink} strokeWidth="2" strokeLinecap="round" fill="none" />
+        // double slashes, upper
+        <svg viewBox="0 0 10 13" className="pointer-events-none absolute -rotate-6 h-[13px] w-[10px]" style={{ top: "12%", ...out(10) }} aria-hidden>
+          <path d="M2.5 10.5 L6.5 2.5 M5.5 11.5 L9 4.5" stroke={ink} strokeWidth="1.9" strokeLinecap="round" fill="none" />
         </svg>
       )}
       {v === 1 && (
-        // small curved underline following part of the bottom edge
-        <svg viewBox="0 0 32 10" className="pointer-events-none absolute h-2 w-[26px]" style={{ ...(mine ? { right: "4px" } : { left: "4px" }), bottom: "-5px" }} aria-hidden>
-          <path d="M2 6.5 C 10 8.8, 21 8.2, 30 4.8" stroke={ink} strokeWidth="2" strokeLinecap="round" fill="none" />
+        // triple ticks, upper-middle
+        <svg viewBox="0 0 9 15" className="pointer-events-none absolute rotate-3 h-[15px] w-[9px]" style={{ top: "32%", ...out(9) }} aria-hidden>
+          <path d="M1.5 12 L4.5 3.5 M3.5 13 L6.5 5 M5.5 11.5 L8 6.5" stroke={ink} strokeWidth="1.9" strokeLinecap="round" fill="none" />
         </svg>
       )}
       {v === 2 && (
-        // double sketch tick near the upper corner
-        <svg viewBox="0 0 24 24" className="pointer-events-none absolute -top-2 h-4 w-4 rotate-2" style={side} aria-hidden>
-          <path d="M4 12 C 9 8.5, 14 7, 20 7.5 M7 16.5 C 11 13.5, 15 12.5, 19 13" stroke={ink} strokeWidth="2" strokeLinecap="round" fill="none" />
+        // swirl, middle
+        <svg viewBox="0 0 10 13" className="pointer-events-none absolute h-[13px] w-[10px]" style={{ top: "50%", ...out(10) }} aria-hidden>
+          <path d="M8.5 2.5 C 4 1, 1.8 5, 4 8 C 5.8 10.4, 9 8.6, 8.2 6.2 C 7.7 4.6, 5.6 4.7, 5.3 6.2" stroke={ink} strokeWidth="1.8" strokeLinecap="round" fill="none" />
         </svg>
       )}
       {v === 3 && (
-        <>
-          <svg viewBox="0 0 24 24" className="pointer-events-none absolute -bottom-1 h-[13px] w-[13px] rotate-6" style={sideFar} aria-hidden>
-            <path d="M6 16 L13 6 M11 18 L18 9" stroke={ink} strokeWidth="2" strokeLinecap="round" fill="none" />
-          </svg>
-          {seed % 3 === 0 && (
-            <svg viewBox="0 0 24 12" className="pointer-events-none absolute -top-1.5 h-2.5 w-5" style={mine ? { right: "22px" } : { left: "22px" }} aria-hidden>
-              <path d="M3 9 C 8 5, 14 3.8, 21 5.5" stroke={cross} strokeWidth="1.8" strokeLinecap="round" fill="none" />
-            </svg>
-          )}
-        </>
+        // plus-sparkle, lower
+        <svg viewBox="0 0 11 11" className="pointer-events-none absolute rotate-12 h-[11px] w-[11px]" style={{ top: "68%", ...out(11) }} aria-hidden>
+          <path d="M5.5 1 L5.5 10 M1 5.5 L10 5.5" stroke={ink} strokeWidth="1.9" strokeLinecap="round" fill="none" />
+        </svg>
+      )}
+      {v === 4 && (
+        // double slashes, lower
+        <svg viewBox="0 0 10 13" className="pointer-events-none absolute rotate-6 h-[13px] w-[10px]" style={{ top: "80%", ...out(10) }} aria-hidden>
+          <path d="M2.5 2.5 L6.5 10.5 M5.5 1.5 L9 8.5" stroke={ink} strokeWidth="1.9" strokeLinecap="round" fill="none" />
+        </svg>
+      )}
+      {v === 5 && (
+        // open C-curve, upper-middle
+        <svg viewBox="0 0 11 10" className="pointer-events-none absolute h-[10px] w-[11px]" style={{ top: "42%", ...out(11) }} aria-hidden>
+          <path d="M9 1.5 C 4 2.5, 2 5.5, 3.5 8.5" stroke={ink} strokeWidth="1.8" strokeLinecap="round" fill="none" />
+        </svg>
+      )}
+      {companion && (
+        // tiny second stroke in the cross ink, opposite half of the bubble
+        <svg viewBox="0 0 7 11" className="pointer-events-none absolute h-[11px] w-[7px] -rotate-6" style={{ top: v <= 2 ? "74%" : "18%", ...out(7) }} aria-hidden>
+          <path d="M2 9 L5 2" stroke={alt} strokeWidth="1.8" strokeLinecap="round" fill="none" />
+        </svg>
       )}
     </>
   );
@@ -263,6 +369,7 @@ export default function ChatPage() {
   const toast = useToast();
   const [detail, setDetail] = useState<ChatDetail | null>(null);
   const [gone, setGone] = useState<string | null>(null);
+  const [leaving, setLeaving] = useState(false); // animated exit before route change
   const [text, setText] = useState("");
   const [fontSize, setFontSize] = useState<number>(16);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -457,6 +564,14 @@ export default function ChatPage() {
       }
     }
   }, []);
+
+  // Animated close: play the leave transition, THEN swap routes, so leaving the
+  // chat feels like the window settling back down instead of a hard cut.
+  const goBack = useCallback(() => {
+    if (leaving) return;
+    setLeaving(true);
+    window.setTimeout(() => router.push("/messages"), 190);
+  }, [leaving, router]);
 
   // Dynamic font sizing with hysteresis:
   // NORMAL: 16px (compact / 1-2 lines)
@@ -1133,7 +1248,7 @@ export default function ChatPage() {
     <>
       <div
         ref={screenRef}
-        className="chat-screen font-display fixed inset-x-0 z-[65] bg-[#0b0b0b] text-white flex flex-col overflow-hidden max-w-2xl mx-auto"
+        className={`chat-screen font-display fixed inset-x-0 z-[65] bg-[#0b0b0b] text-white flex flex-col overflow-hidden max-w-2xl mx-auto ${leaving ? "chat-leave" : "chat-enter"}`}
         style={{
           top: "0px",
           height: "100dvh",
@@ -1144,7 +1259,7 @@ export default function ChatPage() {
       {/* header — PERMANENTLY STICKED at top of chat flex column */}
       <div ref={headerRef} className="shrink-0 z-40 bg-[#0b0b0b]">
         <header className="relative z-10 flex shrink-0 items-center gap-2.5 px-4 pt-[max(12px,env(safe-area-inset-top))] pb-2">
-        <button onClick={() => router.push("/messages")} aria-label="Back to Messages" className="shrink-0 text-white transition-transform active:scale-90">
+        <button onClick={goBack} aria-label="Back to Messages" className="shrink-0 text-white transition-transform active:scale-90">
           <Icon name="arrow-left" size={21} strokeWidth={2.4} />
         </button>
         <Avatar name={detail?.other.display_name ?? "?"} bg={detail?.other.avatar_bg ?? "#7C4DFF"} size={34} />
@@ -1203,6 +1318,8 @@ export default function ChatPage() {
                 <div className={`flex min-w-0 flex-col gap-[7px] ${b.run.mine ? "items-end max-w-[85%]" : "items-start flex-1"}`}>
                   {b.run.msgs.map((m, mi) => {
                     const tail = mi === 0;
+                    // ~1 in 3 non-run-start bubbles gets the comic dialog corner
+                    const beak = !tail && hashId(m.id) % 3 === 0;
                     const gestures = msgGestures(m);
                     const selected = reactTo?.msgId === m.id ? "msg-selected" : "";
                     const animKind = animatingMsgIds[m.id];
@@ -1275,12 +1392,12 @@ export default function ChatPage() {
                     return (
                       <div key={m.id} id={`chat-msg-${m.id}`} className={`flex max-w-[92%] flex-col ${b.run.mine ? "self-end items-end" : "self-start items-start"} ${flashId === m.id ? "msg-flash" : ""} ${bubbleAnim}`}>
                         <div
-                          className={`msg-press relative min-w-[92px] max-w-full ${selected}`}
+                          className={`msg-press relative min-w-[92px] max-w-full ${b.run.mine ? "mr-[10px]" : "ml-[10px]"} ${selected}`}
                           {...gestures}
                           style={swipeStyle(m)}
                         >
-                          <BubbleFrame mine={b.run.mine} tail={tail} />
-                          <BubbleAccents mine={b.run.mine} seed={hashId(m.id)} tail={tail} />
+                          <BubbleFrame mine={b.run.mine} tail={tail} beak={beak} seed={hashId(m.id)} />
+                          <BubbleAccents mine={b.run.mine} seed={hashId(m.id)} tail={tail || beak} />
                           {animKind === "zuup" && b.run.mine && (
                             <span className="speed-stroke absolute -bottom-1 -right-3 text-[#C8FF3D] font-mono text-[11px] select-none pointer-events-none" aria-hidden>//</span>
                           )}
@@ -1289,7 +1406,7 @@ export default function ChatPage() {
                               <Spark size={28} color="#C8FF3D" />
                             </span>
                           )}
-                          <div className="relative max-w-full min-w-0 px-3.5 py-2">
+                          <div className="relative max-w-full min-w-0 px-4 py-2.5">
                             {m.reply_to && (
                               <button
                                 onClick={(e) => { e.stopPropagation(); jumpToMessage(m.reply_to!.id); }}
@@ -1550,6 +1667,8 @@ export default function ChatPage() {
         onTempChange={(enabled) => setDetail((prev) => (prev ? { ...prev, conversation: { ...prev.conversation, temp_chat: enabled } } : prev))}
       />
       <style jsx global>{`
+        /* the chat's sheets all wear the dark MEMORE skin (they render through a
+           portal to document.body, so scoping them under .chat-screen never works) */
         .chat-screen ::selection { background: rgba(124, 77, 255, 0.45); color: #fff; }
         .chat-screen input, .chat-screen textarea { caret-color: #fff; -webkit-tap-highlight-color: transparent; }
         .chat-screen input:focus-visible, .chat-screen textarea:focus-visible { outline: none; box-shadow: none; }
@@ -1557,9 +1676,6 @@ export default function ChatPage() {
         .chat-screen .msg-selected { filter: brightness(1.2) drop-shadow(0 0 9px rgba(200, 255, 61, 0.4)); outline: 2px solid rgba(200, 255, 61, 0.7); outline-offset: 2px; border-radius: 12px; }
         .chat-screen .msg-flash { animation: chatMsgFlash 1.5s ease; }
         @keyframes chatMsgFlash { 0%, 55% { filter: brightness(1.22) drop-shadow(0 0 10px rgba(200, 255, 61, 0.5)); } 100% { filter: none; } }
-        /* the sticker sheet wears the chat's dark charcoal + purple sketch skin */
-        .chat-screen .sheet:has(.sticker-sheet-body) { background: #141020; color: #fff; border-color: rgba(124, 77, 255, 0.9); }
-        .chat-screen .sheet:has(.sticker-sheet-body) .sheet-grab { background: rgba(200, 255, 61, 0.5); }
       `}</style>
     </div>
     </>
@@ -1591,7 +1707,7 @@ function PostPickerSheet({ open, onClose, onPicked }: { open: boolean; onClose: 
   );
 
   return (
-    <Sheet open={open} onClose={onClose} label="Share a MEMORE post">
+    <Sheet open={open} onClose={onClose} label="Share a MEMORE post" dark>
       <div className="hd text-[20px] mb-1">SEND THE RECEIPT</div>
       <p className="text-[11.5px] muted mb-3">The chat gets a reference. The meme stays on the market.</p>
       <div className="max-h-[46vh] overflow-y-auto no-scrollbar space-y-1">
@@ -1730,7 +1846,7 @@ function ChatMenuSheet({ id, open, onClose, username, tempChat, onTempChange }: 
     { icon: "flag", label: "Report", kind: "report" },
   ];
   return (
-    <Sheet open={open} onClose={onClose} label="Chat options">
+    <Sheet open={open} onClose={onClose} label="Chat options" dark>
       <div className="hd text-[20px] mb-3">Chat options</div>
 
       {/* TEMP CHAT — conversation-level mode: messages purge when the chat closes */}

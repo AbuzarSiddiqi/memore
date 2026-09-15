@@ -840,6 +840,30 @@ body {
 .sheet:has(.share-sheet-body) .sheet-grab { background: rgba(200, 255, 61, 0.5); }
 .sheet:has(.share-sheet-body) .muted { color: #8a8496; }
 
+/* Sticker sheet — dark charcoal + purple sketch skin everywhere (it renders
+   through a portal, so it must NOT be scoped under .chat-screen). */
+.sheet:has(.sticker-sheet-body) {
+  background: #141020; color: #fff;
+  border-color: rgba(124, 77, 255, 0.9);
+}
+.sheet:has(.sticker-sheet-body) .sheet-grab { background: rgba(200, 255, 61, 0.5); }
+
 /* reaction glide pop — the slot that follows the finger bounces in */
 @keyframes reactPop { 0% { transform: scale(1); } 45% { transform: scale(1.38); } 72% { transform: scale(0.94); } 100% { transform: scale(1.16); } }
 .react-pop { animation: reactPop 0.24s cubic-bezier(0.3, 1.4, 0.6, 1) forwards; }
+
+/* Chat window open/close — the whole screen rises in and settles back out,
+   so navigating to/from a conversation feels like one smooth sheet. */
+@keyframes chatEnter {
+  from { opacity: 0; transform: translateY(26px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes chatLeave {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(30px) scale(0.985); }
+}
+.chat-enter { animation: chatEnter 0.3s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.chat-leave { animation: chatLeave 0.2s cubic-bezier(0.4, 0, 0.7, 0.2) both; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .chat-enter, .chat-leave { animation-duration: 0.01ms !important; }
+}

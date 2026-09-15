@@ -528,7 +528,7 @@ export function StickerSheet({ open, onClose, onPick }: { open: boolean; onClose
   ];
 
   return (
-    <Sheet open={open} onClose={onClose} label="MEMORE stickers">
+    <Sheet open={open} onClose={onClose} label="MEMORE stickers" dark>
       <div className="sticker-sheet-body">
         <div className="mb-1 flex items-center justify-between">
           <div className="hd text-[19px] text-white">MEMORE STICKERS</div>
