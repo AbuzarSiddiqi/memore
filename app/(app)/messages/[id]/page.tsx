@@ -524,68 +524,87 @@ export default function ChatPage() {
     return () => { active = false; };
   }, [id, user?.id]);
 
-  // 2. Cursor-based incremental synchronization
+  // 2. Cursor-based incremental synchronization.
+  // A load() whose fetch started before an in-flight send committed returns a
+  // snapshot WITHOUT the new message — replacing state with it made sent
+  // messages flicker out and back. Responses are therefore MERGED into the
+  // current list (server rows win on conflicts; a locally-cached copy with
+  // real content beats a content-"" server row), and loads are serialized.
+  const loadQueueRef = useRef<Promise<void>>(Promise.resolve());
   const load = useCallback(async () => {
-    try {
-      const cursor = lastSyncCursorRef.current;
-      const url = cursor ? `/api/chats/${id}?after=${encodeURIComponent(cursor)}` : `/api/chats/${id}`;
-      const d = await api<ChatDetail>(url);
+    const run = loadQueueRef.current.then(async () => {
       if (!alive.current) return;
-      setGone(null);
+      try {
+        const cursor = lastSyncCursorRef.current;
+        const url = cursor ? `/api/chats/${id}?after=${encodeURIComponent(cursor)}` : `/api/chats/${id}`;
+        const d = await api<ChatDetail>(url);
+        if (!alive.current) return;
+        setGone(null);
 
-      // drop locally-cached messages whose own expires_at has passed — the
-      // local echo of the server-authoritative expiration (the server already
-      // excludes them from this response)
-      const pruneExpired = (ms: ChatMessageView[]) => ms.filter((m) => !m.expires_at || new Date(m.expires_at).getTime() > Date.now());
+        // drop locally-cached messages whose own expires_at has passed — the
+        // local echo of the server-authoritative expiration (the server already
+        // excludes them from this response)
+        const pruneExpired = (ms: ChatMessageView[]) => ms.filter((m) => !m.expires_at || new Date(m.expires_at).getTime() > Date.now());
+        const mergeMessages = (prevMsgs: ChatMessageView[], next: ChatMessageView[]) => {
+          const byId = new Map(prevMsgs.map((m) => [m.id, m]));
+          for (const m of next) {
+            const prev = byId.get(m.id);
+            byId.set(m.id, prev && !m.content && prev.content ? { ...m, content: prev.content } : m);
+          }
+          return pruneExpired([...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at)));
+        };
 
-      if (d.is_delta) {
-        if (d.messages && d.messages.length > 0) {
-          // cache the CIPHERTEXT first, then decrypt for display (memory only)
-          const updated = pruneExpired(await appendCachedMessages(id, d.messages));
-          lastSyncCursorRef.current = updated[updated.length - 1].created_at;
-          const display = pruneExpired(await hydrateForDisplay(user?.id ?? "", updated));
-          setDetail((prev) => {
-            if (!prev) return { ...d, messages: display };
-            return {
-              ...prev,
-              conversation: { ...prev.conversation, ...d.conversation },
-              other: d.other,
-              messages: display,
-            };
-          });
-        } else if (d.conversation.other_read_at) {
-          setDetail((prev) => {
-            if (!prev) return prev;
-            const otherRead = d.conversation.other_read_at!;
-            return {
-              ...prev,
-              conversation: { ...prev.conversation, ...d.conversation },
-              messages: pruneExpired(prev.messages).map((m) =>
-                m.sender_id === user?.id && otherRead >= m.created_at ? { ...m, seen: true } : m
-              ),
-            };
-          });
+        if (d.is_delta) {
+          if (d.messages && d.messages.length > 0) {
+            // cache the CIPHERTEXT first, then decrypt for display (memory only)
+            const updated = pruneExpired(await appendCachedMessages(id, d.messages));
+            lastSyncCursorRef.current = updated[updated.length - 1].created_at;
+            const display = pruneExpired(await hydrateForDisplay(user?.id ?? "", updated));
+            setDetail((prev) => {
+              if (!prev) return { ...d, messages: display };
+              return {
+                ...prev,
+                conversation: { ...prev.conversation, ...d.conversation },
+                other: d.other,
+                messages: mergeMessages(prev.messages, display),
+              };
+            });
+          } else if (d.conversation.other_read_at) {
+            setDetail((prev) => {
+              if (!prev) return prev;
+              const otherRead = d.conversation.other_read_at!;
+              return {
+                ...prev,
+                conversation: { ...prev.conversation, ...d.conversation },
+                messages: pruneExpired(prev.messages).map((m) =>
+                  m.sender_id === user?.id && otherRead >= m.created_at ? { ...m, seen: true } : m
+                ),
+              };
+            });
+          } else {
+            // nothing new — still reap locally expired messages (per-message
+            // lifetimes mean the thread can silently shrink between polls)
+            setDetail((prev) => (prev ? { ...prev, messages: pruneExpired(prev.messages) } : prev));
+          }
         } else {
-          // nothing new — still reap locally expired messages (per-message
-          // lifetimes mean the thread can silently shrink between polls)
-          setDetail((prev) => (prev ? { ...prev, messages: pruneExpired(prev.messages) } : prev));
+          const updated = pruneExpired(await appendCachedMessages(id, d.messages));
+          if (updated.length > 0) {
+            lastSyncCursorRef.current = updated[updated.length - 1].created_at;
+          }
+          const display = pruneExpired(await hydrateForDisplay(user?.id ?? "", updated));
+          setDetail((prev) => ({ ...d, messages: mergeMessages(prev?.messages ?? [], display) }));
         }
-      } else {
-        const updated = pruneExpired(await appendCachedMessages(id, d.messages));
-        if (updated.length > 0) {
-          lastSyncCursorRef.current = updated[updated.length - 1].created_at;
+      } catch (e) {
+        if (!alive.current) return;
+        const msg = (e as Error).message || "";
+        if (msg === "expired" || msg.includes("disappeared") || msg.includes("Too late")) {
+          setGone("expired");
+          void purgeConversationMessagesLocal(id);
         }
-        const display = pruneExpired(await hydrateForDisplay(user?.id ?? "", updated));
-        setDetail({ ...d, messages: display });
       }
-    } catch (e) {
-      if (!alive.current) return;
-      const msg = (e as Error).message || "";
-      if (msg === "expired" || msg.includes("disappeared") || msg.includes("Too late")) {
-        setGone("expired");
-        void purgeConversationMessagesLocal(id);
-      }
-    }
+    });
+    loadQueueRef.current = run.catch(() => {});
+    return run;
   }, [id, user?.id]);
 
   useEffect(() => {
