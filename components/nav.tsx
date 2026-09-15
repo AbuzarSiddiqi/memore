@@ -84,27 +84,14 @@ function SketchPurpleBlob() {
 export function BottomNav() {
   const pathname = usePathname();
   const router = useRouter();
-  // When a chat conversation opens, the whole bar gets "erased" (fast wipe)
-  // and redrawn when you come back.
-  const inChat = pathname.startsWith("/messages/");
-  const [mounted, setMounted] = useState(!inChat);
-  const [visible, setVisible] = useState(!inChat);
+  // The chat is a fixed overlay that slides over the nav — no need to
+  // erase / redraw the bar when entering or leaving a conversation.
   const { data: notifData } = useApi<{ unread: number; chatUnread: number }>("/api/notifications");
   const chatUnread = notifData?.chatUnread ?? 0;
   // center-button launch: diamond spins + blob grows, a purple veil expands
   // from the button, then the reels page is revealed behind it.
   const [launching, setLaunching] = useState(false);
   const [veilOut, setVeilOut] = useState(false);
-
-  useEffect(() => {
-    if (inChat) {
-      setVisible(false); // erase…
-      const t = setTimeout(() => setMounted(false), 260); // …then remove
-      return () => clearTimeout(t);
-    }
-    if (!mounted) setMounted(true);
-    requestAnimationFrame(() => setVisible(true)); // redraw
-  }, [inChat, mounted]);
 
   const openReels = () => {
     if (launching) return;
@@ -121,9 +108,9 @@ export function BottomNav() {
           <div className="nav-veil-circle" />
         </div>
       )}
-      {mounted && (
+      {(
         <div
-          className={`nav-erase relative mx-3 mb-3 mx-auto flex max-w-lg items-center bg-[#0b0b0b] px-2 pt-4 ${visible ? "nav-erase-on" : "nav-erase-off"}`}
+          className="nav-erase relative mx-3 mb-3 mx-auto flex max-w-lg items-center bg-[#0b0b0b] px-2 pt-4 nav-erase-on"
           style={{ paddingBottom: "max(14px, env(safe-area-inset-bottom, 0px))" }}
         >
           <SketchFrame />
@@ -226,10 +213,6 @@ export function AppHeader() {
   const { data, refresh } = useApi<{ unread: number; chatUnread: number }>("/api/notifications");
   const chatUnread = data?.chatUnread ?? 0;
   const unread = data?.unread ?? 0;
-  // in a chat conversation the top bar gets erased, like the bottom nav
-  const inChat = pathname.startsWith("/messages/");
-  const [mounted, setMounted] = useState(!inChat);
-  const [visible, setVisible] = useState(!inChat);
   useEffect(() => {
     const t = setInterval(() => {
       if (typeof document !== "undefined" && document.hidden) return;
@@ -244,22 +227,13 @@ export function AppHeader() {
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [refresh]);
-  useEffect(() => {
-    if (inChat) {
-      setVisible(false);
-      const t = setTimeout(() => setMounted(false), 260);
-      return () => clearTimeout(t);
-    }
-    if (!mounted) setMounted(true);
-    requestAnimationFrame(() => setVisible(true));
-  }, [inChat, mounted]);
   return (
     <>
       {/* the header is fixed for the erase animation — this spacer holds its layout space */}
       <div className="app-header-spacer lg:hidden shrink-0" aria-hidden />
       <header className="fixed top-0 inset-x-0 z-40 lg:hidden" aria-label="Primary header">
-      {mounted && (
-      <div className={`nav-erase bg-[var(--bg-app)] app-header-pad pb-2.5 px-4 ${visible ? "nav-erase-on" : "nav-erase-off"}`}>
+      {(
+      <div className="nav-erase bg-[var(--bg-app)] app-header-pad pb-2.5 px-4 nav-erase-on">
       <div className="flex items-center justify-between gap-2 h-9">
         <Link href="/home" aria-label="MEMORE home">
           <MemoreLogo markSize={36} wordSize={21} />
