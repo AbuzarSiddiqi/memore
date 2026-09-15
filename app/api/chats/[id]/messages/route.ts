@@ -1,20 +1,23 @@
 import { NextRequest } from "next/server";
 import { requireUser, ok, fail, rateLimit } from "@/lib/server/http";
 import { ensureHydrated } from "@/lib/server/db";
-import { sendMessage, markRead, expireChats, hydrateChats, type SendInput } from "@/lib/server/chats";
+import { sendMessage, markRead, expireChats, type SendInput } from "@/lib/server/chats";
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   await ensureHydrated();
-  await hydrateChats();
   const user = await requireUser();
   if (!user) return fail("Log in first.", 401);
   if (!rateLimit(`chat-msg:${user.id}`, 30, 60_000)) return fail("Too many messages. Breathe.", 429);
-  expireChats(); // sending into an expired chat is rejected here
+  await expireChats(); // sending into an expired chat is rejected here
   const { id } = await ctx.params;
   const body = await req.json().catch(() => ({}));
   const type: SendInput["type"] = ["text", "post", "image", "video", "sticker"].includes(body.type) ? body.type : "text";
+  // `ciphertext` is the client-encrypted Signal envelope — the server stores
+  // it verbatim and can NEVER see (or accept in its place) any plaintext.
   const input: SendInput = {
     type,
+    ciphertext: typeof body.ciphertext === "string" ? body.ciphertext : "",
+    to_device: typeof body.to_device === "string" ? body.to_device : undefined,
     content: typeof body.content === "string" ? body.content : "",
     post_id: typeof body.post_id === "string" ? body.post_id : undefined,
     media_url: typeof body.media_url === "string" ? body.media_url : undefined,

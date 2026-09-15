@@ -6,7 +6,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const user = await requireUser();
   if (!user) return fail("Log in first.", 401);
   if (!rateLimit(`chat-react:${user.id}`, 40, 60_000)) return fail("Easy on the reactions.", 429);
-  expireChats();
+  await expireChats();
   const { id, messageId } = await ctx.params;
   const body = await req.json().catch(() => ({}));
   const reactionId = typeof body.reaction_id === "string" ? body.reaction_id : "";

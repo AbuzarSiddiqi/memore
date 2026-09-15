@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useSession } from "@/lib/client";
+import { usePresenceBinding } from "@/lib/realtime/presence";
 import { BottomNav, SideNav, AppHeader, RightRail } from "@/components/nav";
 import { MemoreMark, MemoreWordmark } from "@/components/brand";
 import { PostButton } from "@/components/post-button";
@@ -11,6 +12,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, loading } = useSession();
   const router = useRouter();
   const pathname = usePathname();
+  // App-wide presence: one Supabase Realtime presence channel per tab.
+  // No Postgres writes — online/typing state is ephemeral by design.
+  usePresenceBinding(user?.id);
 
   useEffect(() => {
     if (!loading && !user) router.replace("/login");

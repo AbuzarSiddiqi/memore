@@ -7,5 +7,6 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
   if (!user) return fail("Log in first.", 401);
   const { id } = await ctx.params;
   const muted = await toggleMute(user, id);
+  if (typeof muted !== "boolean") return fail(muted.error, muted.status ?? 400);
   return ok({ muted });
 }

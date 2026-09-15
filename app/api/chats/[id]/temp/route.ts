@@ -1,12 +1,11 @@
 import { NextRequest } from "next/server";
 import { requireUser, ok, fail } from "@/lib/server/http";
-import { hydrateChats, setTempChat } from "@/lib/server/chats";
+import { setTempChat } from "@/lib/server/chats";
 
 // POST /api/chats/[id]/temp — toggle the conversation-level TEMP CHAT mode.
 // The conversation itself never expires; only the lifetime of messages inside
 // it changes (they purge when the chat is closed).
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  await hydrateChats();
   const user = await requireUser();
   if (!user) return fail("Log in first.", 401);
   const { id } = await ctx.params;

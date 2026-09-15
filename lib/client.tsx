@@ -146,6 +146,17 @@ export async function clientLogout(userId?: string) {
       await supabase.auth.signOut().catch(() => {});
     }
   } catch {}
+  // E2EE hygiene: wipe the session plaintext map and the device's private
+  // key store so no crypto state survives an account switch on this browser.
+  try {
+    const { wipeDecryptedMemory, dropEngine } = await import("@/lib/crypto/engine");
+    const { IndexedDbProtocolStore } = await import("@/lib/crypto/store");
+    if (userId) {
+      await new IndexedDbProtocolStore(userId).destroy();
+      dropEngine(userId);
+    }
+    wipeDecryptedMemory();
+  } catch {}
   try {
     await purgeUserPrivateCache(userId || "me");
   } catch {}

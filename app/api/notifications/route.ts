@@ -11,8 +11,8 @@ export async function GET() {
     .notifications.filter((n) => n.user_id === user.id)
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .slice(0, 50);
-  expireChats();
-  return ok({ notifications: list, unread: list.filter((n) => !n.read).length, chatUnread: chatUnreadTotal(user) });
+  await expireChats();
+  return ok({ notifications: list, unread: list.filter((n) => !n.read).length, chatUnread: await chatUnreadTotal(user) });
 }
 
 export async function POST(req: NextRequest) {

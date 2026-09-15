@@ -439,7 +439,12 @@ export async function persistSnapshotToSupabase(state: DB): Promise<void> {
 
   snapshotUploadInFlight = true;
   try {
-    const serialized = Buffer.from(JSON.stringify(state));
+    // Chat lives in Postgres now (migration_v6) — chat data must NEVER be
+    // persisted in the JSON snapshot again, so legacy plaintext message
+    // content can't survive into any cloud copy.
+    const { chats: _c, chat_messages: _m, message_reactions: _r, ...rest } = state;
+    void _c; void _m; void _r;
+    const serialized = Buffer.from(JSON.stringify(rest));
     await admin.storage.from("system").upload(CLOUD_STATE_FILE, serialized, {
       contentType: "application/json",
       upsert: true,

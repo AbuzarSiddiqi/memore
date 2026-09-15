@@ -6,7 +6,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import type { PointerEvent as ReactPointerEvent } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { api, useApi, useSession, useToast } from "@/lib/client";
+import { api, useApi, useSession, useToast, timeAgo } from "@/lib/client";
 import { getCachedMessages, appendCachedMessages, purgeConversationMessagesLocal, getCachedChats, removeCachedMessage, updateCachedMessageReactions } from "@/lib/client-cache";
 import { playSfx } from "@/lib/sfx";
 
@@ -21,6 +21,79 @@ import { StickerArt, StickerSheet, recordStickerRecent } from "@/components/stic
 import { ShareSheet } from "@/components/share";
 import { Icon, type IconName } from "@/components/icons";
 import { Spark } from "@/components/brand";
+
+// E2EE + presence
+import { encryptMessagePayload, forgetDecrypted } from "@/lib/crypto/engine";
+import { encryptMedia, decryptMedia } from "@/lib/crypto/media";
+import { hydrateForDisplay, rememberMediaKey, mediaKeyFor } from "@/lib/chat/display";
+import { presenceHub, usePeerPresence, usePeerTyping, useTypingBroadcaster } from "@/lib/realtime/presence";
+
+function presenceLabel(status: string): string {
+  switch (status) {
+    case "viewing_meme": return "viewing a meme";
+    case "investing": return "investing";
+    case "browsing": return "browsing";
+    case "away": return "away";
+    default: return "online";
+  }
+}
+
+/** Decrypted private media viewer: fetch the ciphertext blob, decrypt it
+ * locally (AES-GCM, key from the message envelope), render a local blob URL.
+ * The plaintext bytes never hit any server or persistent cache. */
+function useDecryptedMediaUrl(messageId: string | null, mediaUrl: string | null): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!mediaUrl || !messageId) return;
+    const keys = mediaKeyFor(messageId);
+    if (!keys) return; // payload not decrypted yet — nothing to show
+    let alive = true;
+    let objectUrl: string | null = null;
+    (async () => {
+      try {
+        const res = await fetch(mediaUrl);
+        if (!res.ok) return;
+        const cipher = await res.arrayBuffer();
+        const blob = await decryptMedia(cipher, keys.key, keys.iv);
+        if (!alive) return;
+        objectUrl = URL.createObjectURL(new Blob([blob], { type: keys.mime }));
+        setUrl(objectUrl);
+      } catch {
+        // wrong key / corrupt blob — leave the placeholder visible
+      }
+    })();
+    return () => {
+      alive = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [messageId, mediaUrl]);
+  return url;
+}
+
+function EncryptedImage({ msg }: { msg: ChatMessageView }) {
+  const url = useDecryptedMediaUrl(msg.id, msg.media_url);
+  if (!url) {
+    return (
+      <span className="mb-1 flex h-[100px] w-[150px] items-center justify-center rounded-lg bg-[#141414] text-[11px] text-white/40">
+        decrypting…
+      </span>
+    );
+  }
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={url} alt="" className="mb-1 max-w-[190px] rounded-lg" loading="lazy" />;
+}
+
+function EncryptedVideo({ msg }: { msg: ChatMessageView }) {
+  const url = useDecryptedMediaUrl(msg.id, msg.media_url);
+  if (!url) {
+    return (
+      <span className="mb-1 flex h-[100px] w-[150px] items-center justify-center rounded-lg bg-[#141414] text-[11px] text-white/40">
+        decrypting…
+      </span>
+    );
+  }
+  return <video src={url} controls className="mb-1 max-w-[190px] rounded-lg" preload="metadata" />;
+}
 
 const TRAY_KEY = "memore-chat-reactions";
 const REPLY_THRESHOLD = 64; // px of pull before a swipe becomes a reply
@@ -421,7 +494,8 @@ export default function ChatPage() {
   } | null>(null);
   const [screenDx, setScreenDx] = useState(0); // realtime swipe offset for the whole chat screen
 
-  // 1. Instant Cache-First Hydration on mount (Frame 0 rendering)
+  // 1. Instant Cache-First Hydration on mount (Frame 0 rendering).
+  // The cache stores CIPHERTEXT; hydrate decrypts in memory before display.
   useEffect(() => {
     let active = true;
     (async () => {
@@ -431,6 +505,8 @@ export default function ChatPage() {
         lastSyncCursorRef.current = cached[cached.length - 1].created_at;
         const allChats = await getCachedChats(user?.id);
         const chatMeta = allChats?.find((c) => c.id === id);
+        const display = await hydrateForDisplay(user?.id ?? "", cached);
+        if (!active) return;
         setDetail((prev) => {
           if (prev) return prev;
           return {
@@ -440,7 +516,7 @@ export default function ChatPage() {
               temp_chat: !!chatMeta?.temp_chat,
             },
             other: chatMeta?.other || { id: "", username: "", display_name: "", avatar_bg: "#222" },
-            messages: cached,
+            messages: display,
           };
         });
       }
@@ -464,15 +540,17 @@ export default function ChatPage() {
 
       if (d.is_delta) {
         if (d.messages && d.messages.length > 0) {
+          // cache the CIPHERTEXT first, then decrypt for display (memory only)
           const updated = pruneExpired(await appendCachedMessages(id, d.messages));
           lastSyncCursorRef.current = updated[updated.length - 1].created_at;
+          const display = pruneExpired(await hydrateForDisplay(user?.id ?? "", updated));
           setDetail((prev) => {
-            if (!prev) return d;
+            if (!prev) return { ...d, messages: display };
             return {
               ...prev,
               conversation: { ...prev.conversation, ...d.conversation },
               other: d.other,
-              messages: updated,
+              messages: display,
             };
           });
         } else if (d.conversation.other_read_at) {
@@ -497,7 +575,8 @@ export default function ChatPage() {
         if (updated.length > 0) {
           lastSyncCursorRef.current = updated[updated.length - 1].created_at;
         }
-        setDetail({ ...d, messages: updated });
+        const display = pruneExpired(await hydrateForDisplay(user?.id ?? "", updated));
+        setDetail({ ...d, messages: display });
       }
     } catch (e) {
       if (!alive.current) return;
@@ -535,13 +614,59 @@ export default function ChatPage() {
         setDetail((prev) => {
           if (!prev) return prev;
           const dead = new Set<string>(e.detail.messageIds ?? []);
+          forgetDecrypted(user?.id ?? "", [...dead]);
           return { ...prev, messages: prev.messages.filter((m) => !dead.has(m.id)) };
         });
       }
     };
     window.addEventListener("memore:messages-expired", onExpired);
     return () => window.removeEventListener("memore:messages-expired", onExpired);
-  }, [id]);
+  }, [id, user?.id]);
+
+  // Realtime delivery: the peer pushes the CIPHERTEXT envelope on the
+  // conversation's broadcast channel; we reconcile it against the server
+  // cache (idempotent by message id) and decrypt locally. The 5s delta poll
+  // above remains the offline/reconnect safety net.
+  useEffect(() => {
+    if (!user?.id) return;
+    const off = presenceHub().onChatMessage(id, (msg) => {
+      if (!msg || msg.conversation_id !== id) return;
+      void (async () => {
+        // merge into the ciphertext cache (idempotent by id), then re-hydrate
+        const merged = await appendCachedMessages(id, [msg as unknown as ChatMessageView]);
+        if (msg.created_at > (lastSyncCursorRef.current || "")) {
+          lastSyncCursorRef.current = msg.created_at;
+        }
+        const display = await hydrateForDisplay(user.id, merged);
+        setDetail((prev) => {
+          if (!prev) return prev;
+          const lastNew = display[display.length - 1]?.id;
+          const lastOld = prev.messages[prev.messages.length - 1]?.id;
+          if (display.length === prev.messages.length && lastNew === lastOld) return prev;
+          return { ...prev, messages: display };
+        });
+      })();
+    });
+    return () => {
+      off();
+      presenceHub().leaveChat(id);
+    };
+  }, [id, user?.id]);
+
+  // Typing indicator (inbound) + broadcaster (outbound) — realtime only.
+  const peerTyping = usePeerTyping(id, user?.id);
+  const broadcastTyping = useTypingBroadcaster(id);
+
+  // Peer presence for the header — instant via Realtime, zero Postgres.
+  const { status: peerStatus } = usePeerPresence(detail?.other.id || undefined);
+
+  // VIEWING_MEME: transient Realtime status while a MEMORE post is open from
+  // this chat (invest/share sheets). Cleared as soon as the view closes.
+  const viewingMeme = !!investMeme || !!shareMeme;
+  useEffect(() => {
+    presenceHub().setStatus(viewingMeme ? "viewing_meme" : "online");
+    return () => presenceHub().setStatus("online");
+  }, [viewingMeme]);
 
   // TEMP CHAT close: leaving the chat tells the server to purge its messages.
   // Server-authoritative; the conversation and contact always survive. The
@@ -1217,11 +1342,38 @@ export default function ChatPage() {
     };
   };
 
-  const send = async (payload: { type: "text" | "image" | "video" | "post" | "sticker"; content?: string; media_url?: string; post_id?: string; sticker_id?: string; reply_to_message_id?: string }) => {
+  const send = async (payload: { type: "text" | "image" | "video" | "post" | "sticker"; content?: string; media_url?: string; post_id?: string; sticker_id?: string; reply_to_message_id?: string; media?: { key: string; iv: string; mime: string } }) => {
+    if (busy) return;
     setBusy(true);
+    broadcastTyping(false); // sending ends the typing burst
     const optId = `opt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const currentReply = replyTo;
     const anim = payload.type === "sticker" ? "sticker" : "zuup";
+
+    // ── Encrypt ONCE, here, before anything optimistic. No plaintext ever
+    // leaves the device: if encryption fails we show a clean error and send
+    // NOTHING (no plaintext fallback, no half-sent optimistic bubble).
+    let wire: { ciphertext: string; to_device: string | null; encryption_version: string } | null = null;
+    const peerId = detail?.other.id;
+    const hasSecret = !!payload.content || !!payload.media;
+    if (payload.type !== "sticker" && hasSecret) {
+      if (!peerId) {
+        toast("Chat isn't ready yet. Try again.", "err");
+        setBusy(false);
+        return;
+      }
+      try {
+        wire = await encryptMessagePayload(user?.id ?? "", peerId, {
+          v: 1,
+          ...(payload.content ? { text: payload.content } : {}),
+          ...(payload.media ? { media: payload.media } : {}),
+        });
+      } catch {
+        toast("Couldn't secure this message. Try again.", "err");
+        setBusy(false);
+        return;
+      }
+    }
 
     // Optimistic outgoing message
     const optimisticMsg: ChatMessageView = {
@@ -1230,6 +1382,8 @@ export default function ChatPage() {
       sender_id: user?.id || "me",
       type: payload.type,
       content: payload.content || "",
+      ciphertext: wire?.ciphertext ?? "",
+      encryption_version: wire?.encryption_version ?? "",
       post_id: payload.post_id ?? null,
       media_url: payload.media_url ?? null,
       post: null,
@@ -1257,18 +1411,36 @@ export default function ChatPage() {
 
     try {
       const res = await api<{ message: ChatMessageView }>(`/api/chats/${id}/messages`, {
-        json: { ...payload, reply_to_message_id: payload.reply_to_message_id ?? currentReply?.id },
+        json: {
+          type: payload.type,
+          ciphertext: wire?.ciphertext ?? "",
+          to_device: wire?.to_device ?? undefined,
+          content: payload.content,
+          post_id: payload.post_id,
+          media_url: payload.media_url,
+          sticker_id: payload.sticker_id,
+          reply_to_message_id: payload.reply_to_message_id ?? currentReply?.id,
+        },
       });
       if (res?.message) {
+        // our own media keys don't need decrypting — register them directly
+        rememberMediaKey(res.message.id, payload.media);
+        const sent: ChatMessageView = {
+          ...res.message,
+          // the wire response carries no plaintext — restore OUR local view
+          content: payload.content || (res.message.type === "text" ? "" : res.message.content),
+          reply_to: optimisticMsg.reply_to,
+        };
         setDetail((prev) => {
           if (!prev) return prev;
           return {
             ...prev,
-            messages: prev.messages.map((m) => (m.id === optId ? res.message : m)),
+            messages: prev.messages.map((m) => (m.id === optId ? sent : m)),
           };
         });
-        const updated = await appendCachedMessages(id, [res.message]);
+        const updated = await appendCachedMessages(id, [res.message]); // ciphertext in the cache
         lastSyncCursorRef.current = res.message.created_at;
+        void updated;
       }
       await load();
     } catch (e) {
@@ -1315,6 +1487,7 @@ export default function ChatPage() {
       };
     });
     void removeCachedMessage(id, msgId);
+    forgetDecrypted(user?.id ?? "", [msgId]); // drop the session plaintext too
 
     try {
       await api(`/api/chats/${id}/messages/${msgId}`, { method: "DELETE" });
@@ -1379,10 +1552,18 @@ export default function ChatPage() {
     if (!file) return;
     setBusy(true);
     try {
+      // 1. Encrypt the bytes LOCALLY before any upload — the server and the
+      // storage bucket only ever see AES-GCM ciphertext.
+      const kind: "image" | "video" = fileKind.current === "video" || file.type.startsWith("video/") ? "video" : "image";
+      const enc = await encryptMedia(await file.arrayBuffer());
+      const mime = file.type || (kind === "video" ? "video/mp4" : "image/jpeg");
+      // 2. Upload the ciphertext (enc=1: no compression, no mime inference).
       const form = new FormData();
-      form.append("file", file);
-      const up = await api<{ url: string; media_type: "image" | "video" }>("/api/upload", { body: form });
-      await send({ type: up.media_type, media_url: up.url, content: text });
+      form.append("file", new Blob([enc.blob], { type: "application/octet-stream" }), "media.bin");
+      form.append("kind", kind);
+      const up = await api<{ url: string; media_type: "image" | "video" }>("/api/upload?enc=1", { body: form });
+      // 3. The media key rides INSIDE the Signal-encrypted envelope.
+      await send({ type: up.media_type, media_url: up.url, content: text, media: { key: enc.key, iv: enc.iv, mime } });
       setText("");
     } catch (e) {
       toast((e as Error).message, "err");
@@ -1452,8 +1633,23 @@ export default function ChatPage() {
         <Avatar name={detail?.other.display_name ?? "?"} bg={detail?.other.avatar_bg ?? "#7C4DFF"} size={34} />
         <div className="min-w-0 flex-1">
           <div className="truncate font-bold text-[16.5px] leading-tight text-white">@{detail?.other.username ?? "…"}</div>
+          {/* Realtime presence: TYPING beats everything, then live status,
+              then the throttled server-stamped last seen. No noise. */}
           <div className="mt-0.5 flex items-center gap-1.5 text-[10.5px] leading-none text-white/50">
-            <span className="h-1.5 w-1.5 rounded-full bg-[#C8FF3D]" /> online
+            {peerTyping ? (
+              <span className="font-bold text-[#C8FF3D]">typing…</span>
+            ) : peerStatus !== "offline" ? (
+              <>
+                <span className={`h-1.5 w-1.5 rounded-full ${peerStatus === "away" ? "bg-white/35" : "bg-[#C8FF3D]"}`} />
+                <span className={peerStatus === "away" ? "" : "text-[#C8FF3D]"}>{presenceLabel(peerStatus)}</span>
+              </>
+            ) : detail?.other.last_seen_at ? (
+              <span>last seen {timeAgo(detail.other.last_seen_at)}</span>
+            ) : (
+              <>
+                <span className="h-1.5 w-1.5 rounded-full bg-white/25" /> offline
+              </>
+            )}
           </div>
         </div>
         <div className="flex shrink-0 flex-col items-end">
@@ -1615,13 +1811,8 @@ export default function ChatPage() {
                                 </div>
                               </button>
                             )}
-                            {m.type === "image" && m.media_url && (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img src={m.media_url} alt="" className="mb-1 max-w-[190px] rounded-lg" loading="lazy" />
-                            )}
-                            {m.type === "video" && m.media_url && (
-                              <video src={m.media_url} controls className="mb-1 max-w-[190px] rounded-lg" preload="metadata" />
-                            )}
+                            {m.type === "image" && m.media_url && <EncryptedImage msg={m} />}
+                            {m.type === "video" && m.media_url && <EncryptedVideo msg={m} />}
                             {m.content && (
                               <p
                                 className={`whitespace-pre-wrap text-[16px] leading-snug ${b.run.mine ? "text-[#0a0a0a]" : "text-white/95"}`}
@@ -1748,7 +1939,10 @@ export default function ChatPage() {
               placeholder="say something..."
               value={text}
               maxLength={10000}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => {
+                setText(e.target.value);
+                broadcastTyping(e.target.value.length > 0); // debounced realtime broadcast — never per keystroke
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();

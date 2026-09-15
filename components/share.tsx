@@ -2,17 +2,19 @@
 // The ONE share sheet — MEMORE-native, multi-select, search-first. Used from
 // the feed rail, reels, and anywhere a meme can be sent to a chat.
 import React, { useEffect, useRef, useState } from "react";
-import { api, useApi, useToast } from "@/lib/client";
+import { api, useApi, useSession, useToast } from "@/lib/client";
 import { Sheet } from "@/components/ui";
 import { Avatar } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { Spark } from "@/components/brand";
+import { encryptMessagePayload } from "@/lib/crypto/engine";
 import type { ChatOtherUser, MemeView } from "@/lib/types";
 
 interface Person {
   username: string;
   display_name: string;
   avatar_bg: string;
+  id?: string;
   recent: boolean; // came from an active/recent chat
 }
 
@@ -22,6 +24,7 @@ let cachedContacts: Person[] = [];
 /** Send the meme to every selected conversation (creates chats on the fly). */
 export function ShareSheet({ meme, open, onClose, onSent }: { meme: MemeView; open: boolean; onClose: () => void; onSent?: () => void }) {
   const toast = useToast();
+  const { user } = useSession();
   const chats = useApi<{ chats: Array<{ id: string; other: ChatOtherUser }> }>(open ? "/api/chats" : null);
   const contacts = useApi<{ contacts: ChatOtherUser[] }>(open ? "/api/chats/contacts" : null);
   const [q, setQ] = useState("");
@@ -66,11 +69,18 @@ export function ShareSheet({ meme, open, onClose, onSent }: { meme: MemeView; op
 
   const send = async () => {
     if (selected.length === 0 || busy) return;
+    if (!user?.id) return;
     setBusy(true);
     try {
       for (const username of selected) {
+        // the sender note is user content — encrypt it per recipient
+        const peer = [...chatPeople, ...rawContacts].find((p) => p.username === username);
+        if (!peer?.id) throw new Error("Couldn't resolve that chat.");
+        const note = await encryptMessagePayload(user.id, peer.id, { v: 1, text: "look at this one" });
         const c = await api<{ id: string }>("/api/chats", { json: { username } });
-        await api(`/api/chats/${c.id}/share-post`, { json: { post_id: meme.id, content: "look at this one" } });
+        await api(`/api/chats/${c.id}/share-post`, {
+          json: { post_id: meme.id, ciphertext: note.ciphertext, to_device: note.to_device, content: "look at this one" },
+        });
       }
       toast(`RECEIPT SENT ✦`);
       onSent?.();

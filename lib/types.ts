@@ -42,6 +42,7 @@ export interface Profile {
   created_at: string;
   blocked?: string[];
   active_reactions?: string[]; // the user's five quick-reaction slots (order = priority)
+  last_seen_at?: string | null; // persistent, server-stamped, updated sparingly (presence heartbeat)
 }
 
 export interface Meme {
@@ -300,9 +301,12 @@ export interface ChatMessage {
   conversation_id: string;
   sender_id: string;
   type: "text" | "post" | "image" | "video" | "sticker";
-  content: string;
+  content: string; // ALWAYS "" on the wire — the plaintext never leaves the device
+  ciphertext: string; // client-encrypted Signal envelope (base64); '' for sticker-only
+  encryption_version: string; // e.g. "signal-x3dh-dr-v1"
+  to_device?: string | null; // recipient device the envelope is addressed to (metadata only)
   post_id: string | null;
-  media_url: string | null;
+  media_url: string | null; // points to an ENCRYPTED media blob
   sticker_id: string | null; // key into the MEMORE sticker catalog (lib/stickers.ts)
   reply_to_message_id: string | null; // quote reference — never a duplicated object
   created_at: string; // server timestamp
@@ -340,17 +344,21 @@ export interface ChatOtherUser {
   username: string;
   display_name: string;
   avatar_bg: string;
+  last_seen_at?: string | null; // server-stamped, throttled — never a heartbeat
 }
 
 export interface ChatListItem {
   id: string;
   other: ChatOtherUser;
-  preview: string; // "" when the thread is empty (expired last message → "start a chat")
+  preview: string; // always "" — built client-side from last_ciphertext (never plaintext server-side)
   preview_type: ChatMessage["type"];
   last_at: string; // last message time (falls back to conversation creation)
   unread: number;
   temp_chat: boolean;
   muted: boolean;
+  last_ciphertext?: string | null; // newest live message's envelope — decrypted locally for the preview
+  last_encryption_version?: string | null;
+  last_to_device?: string | null;
 }
 
 export interface ChatMessageView extends ChatMessage {

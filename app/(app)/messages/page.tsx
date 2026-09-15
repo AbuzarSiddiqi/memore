@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, useApi, useSession } from "@/lib/client";
 import { getCachedChats, setCachedChats, sweepExpiredChats } from "@/lib/client-cache";
+import { previewTextFor } from "@/lib/chat/display";
 import type { ChatListItem } from "@/lib/types";
 import { Avatar, EmptyState, NeoButton, Skeleton } from "@/components/ui";
 import { ContactsSheet } from "@/components/chat";
@@ -15,6 +16,16 @@ import { Spark } from "@/components/brand";
 
 function previewIcon(type: ChatListItem["preview_type"]): string {
   return type === "image" ? "📷 " : type === "video" ? "🎬 " : type === "post" ? "" : "";
+}
+
+function previewLabel(type: ChatListItem["preview_type"]): string {
+  switch (type) {
+    case "image": return "photo";
+    case "video": return "video";
+    case "sticker": return "sticker";
+    case "post": return "Sent a MEMORE post";
+    default: return "";
+  }
 }
 
 export default function MessagesPage() {
@@ -76,6 +87,24 @@ export default function MessagesPage() {
   const chats = data?.chats ?? cachedChats ?? [];
   const isInitialLoading = loading && chats.length === 0;
 
+  // Previews arrive as CIPHERTEXT (the server can't read them either).
+  // Decrypt the text ones locally; type-based labels need no decryption.
+  const [previews, setPreviews] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!user?.id || chats.length === 0) return;
+    let alive = true;
+    (async () => {
+      const next: Record<string, string> = {};
+      await Promise.all(
+        chats.map(async (c) => {
+          next[c.id] = await previewTextFor(user.id, c.id, c.other.id, c);
+        })
+      );
+      if (alive) setPreviews(next);
+    })();
+    return () => { alive = false; };
+  }, [user?.id, data?.chats, cachedChats]);
+
   const startChat = async (username: string) => {
     const r = await api<{ id: string }>("/api/chats", { json: { username } });
     setPicker(false);
@@ -115,8 +144,14 @@ export default function MessagesPage() {
                 </div>
                 <div className={`text-[12px] truncate ${c.unread ? "text-white font-medium" : "muted"}`}>
                   {c.unread > 0 && <span className="text-[#C8FF3D] mr-1">●</span>}
-                  {c.preview ? (
-                    <>{previewIcon(c.preview_type)}{c.preview}</>
+                  {c.preview_type === "text" && c.last_ciphertext ? (
+                    previews[c.id] ? (
+                      <>{previews[c.id]}</>
+                    ) : (
+                      <span className="italic opacity-70">encrypted…</span>
+                    )
+                  ) : previewLabel(c.preview_type) ? (
+                    <>{previewIcon(c.preview_type)}{previewLabel(c.preview_type)}</>
                   ) : (
                     <span className="italic opacity-70">start a chat</span>
                   )}

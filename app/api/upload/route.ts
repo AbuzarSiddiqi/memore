@@ -85,12 +85,45 @@ async function compressVideo(inputBuffer: Buffer): Promise<CompressedMedia> {
 export async function POST(req: NextRequest) {
   try {
     const user = await requireUser();
-    if (!user) return fail("Log in first before uploading.", 401);
+    if (!user) return fail("Log in before uploading.", 401);
     if (!rateLimit(`upload:${user.id}`, 10, 5 * 60_000)) return fail("Too many uploads. Rest the internet for a moment.", 429);
 
     const form = await req.formData();
     const file = form.get("file");
     if (!(file instanceof File)) return fail("Upload failed. No file provided.");
+
+    // E2EE chat media path (?enc=1): the bytes are ALREADY ciphertext —
+    // AES-GCM output from lib/crypto/media.ts. Store the blob verbatim with
+    // no compression, no preview generation and no mime inference (mime is
+    // a secret too; it travels inside the encrypted message envelope).
+    const isEncrypted = new URL(req.url).searchParams.get("enc") === "1";
+    if (isEncrypted) {
+      if (file.size > MAX_VIDEO) return fail("File is too big (max 50MB).");
+      const buf = Buffer.from(await file.arrayBuffer());
+      const name = `${uid()}.bin`;
+      let fileUrl = `/api/media/${name}`;
+      try {
+        if (process.env.NODE_ENV === "development") {
+          fs.mkdirSync(uploadsDir, { recursive: true });
+          fs.writeFileSync(path.join(uploadsDir, name), buf);
+        }
+      } catch { /* read-only fs */ }
+      try {
+        const { createAdminClient } = await import("@/lib/supabase/admin");
+        const admin = createAdminClient();
+        if (admin) {
+          const { error } = await admin.storage.from("memes").upload(name, buf, {
+            contentType: "application/octet-stream",
+            upsert: true,
+          });
+          if (!error) {
+            const { data: { publicUrl } } = admin.storage.from("memes").getPublicUrl(name);
+            if (publicUrl) fileUrl = publicUrl;
+          }
+        }
+      } catch { /* local-only fallback is fine */ }
+      return ok({ url: fileUrl, thumbnail_url: fileUrl, media_type: form.get("kind") === "video" ? "video" : "image", size: buf.length, mime: "application/octet-stream" });
+    }
 
     const isImage = IMAGE_MIMES.includes(file.type);
     const isVideo = VIDEO_MIMES.includes(file.type);
